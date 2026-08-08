@@ -260,12 +260,31 @@
     });
   }
 
-  // 模型实际画布尺寸上报：用于 Flutter 侧"窗口贴合模型"（一次即可，取首次有效值）
-  var fitReported = false;
+  // 模型实际画布尺寸上报：用于 Flutter 侧"窗口贴合模型"。
+  // 采用"贴合阶段取最大范围 + 多拍上报"策略：模型加载/待机动画中途扫描到的
+  // 范围可能偏小，只上报最大范围可避免窗口被裁剪（reload/换模型后不会"消失一大半"）。
+  var fitState = { active: false, best: null, retries: 0 };
+  function startFit() {
+    fitState.active = true;
+    fitState.best = null;
+    fitState.retries = 0;
+    scheduleFitReports();
+  }
+  function scheduleFitReports() {
+    setTimeout(reportModelFit, 800);
+    setTimeout(reportModelFit, 2000);
+    setTimeout(reportModelFit, 4000);
+  }
   function reportModelFit() {
-    if (fitReported) return;
+    if (!fitState.active) return;
     var canvas = document.querySelector("canvas");
-    if (!canvas) return;
+    if (!canvas) {
+      // canvas 尚未创建（模型还在加载）：1 秒后重试，最多 10 次
+      if ((fitState.retries = (fitState.retries || 0) + 1) <= 10) {
+        setTimeout(reportModelFit, 1000);
+      }
+      return;
+    }
     var b = modelBounds();
     var obj = null;
     if (typeof b === "string" && b.indexOf("{") === 0) {
@@ -273,13 +292,19 @@
     }
     if (!obj || !obj.css || obj.css.w < 20 || obj.css.h < 20) {
       petLog("model-fit retry bounds=" + b);
+      if ((fitState.retries = (fitState.retries || 0) + 1) <= 10) {
+        setTimeout(reportModelFit, 1000);
+      }
       return;
     }
+    // 取更大范围（面积比较），避免中途扫描的偏小值覆盖正确贴合
+    var cur = fitState.best;
+    if (cur && obj.css.w * obj.css.h <= cur.w * cur.h) return;
+    fitState.best = { x: obj.css.x, y: obj.css.y, w: obj.css.w, h: obj.css.h };
     // 预留 10px 安全边距，避免待机动画导致裁剪
     var pad = 10;
     var x = obj.css.x - pad, y = obj.css.y - pad;
     var w = obj.css.w + pad * 2, h = obj.css.h + pad * 2;
-    fitReported = true;
     petLog("model-fit bounds=" + JSON.stringify({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }));
     postPet("model-fit x=" + Math.round(x) + " y=" + Math.round(y) + " w=" + Math.round(w) + " h=" + Math.round(h));
     reportRegion("model-fit");
@@ -415,6 +440,17 @@
     while (stage.firstChild) stage.removeChild(stage.firstChild);
   }
 
+  // 模型缩放变化时重建（L2Dwidget 的 scale 仅在 init 时生效）
+  function reinitModel() {
+    if (!MODEL_JSON) return;
+    clearStage();
+    var oldCanvas = document.querySelector("canvas");
+    if (oldCanvas) oldCanvas.remove();
+    fitState.active = false; // 停止旧的上报阶段
+    boot();
+    startFit();
+  }
+
   // ---- 加载器：Cubism 2.1（live2d-widget）----
   function bootL2d() {
     if (!window.L2Dwidget) { petLog("L2Dwidget-missing-retry"); setTimeout(boot, 200); return; }
@@ -497,10 +533,12 @@
       hideFallback();
       boot();
       loadSoundMap();
+      startFit();
       return true;
     },
     // 动态应用外观（设置面板调用）
     applyAppearance: function (opts) {
+      var scaleBefore = winCfg.modelScale;
       if (opts && typeof opts === "object") {
         if (typeof opts.displayWidth === "number") winCfg.displayWidth = opts.displayWidth;
         if (typeof opts.displayHeight === "number") winCfg.displayHeight = opts.displayHeight;
@@ -511,6 +549,10 @@
         if (typeof opts.inputReserve === "number") winCfg.inputReserve = opts.inputReserve;
         if (typeof opts.soundEnabled === "boolean") soundCfg.enabled = opts.soundEnabled;
         if (typeof opts.soundVolume === "number") soundCfg.volume = opts.soundVolume;
+      }
+      if (Math.abs(winCfg.modelScale - scaleBefore) > 0.001) {
+        petLog("appearance scale-change -> reinit model scale=" + winCfg.modelScale);
+        reinitModel();
       }
       layoutContainer();
       return true;
@@ -528,10 +570,8 @@
     },
     // 重置贴合上报并立即重新扫描（模型大小/窗口变化后调用）
     requestFit: function () {
-      fitReported = false;
+      startFit();
       reportModelFit();
-      setTimeout(reportModelFit, 600);
-      setTimeout(reportModelFit, 1500);
       return true;
     }
   };
@@ -562,9 +602,7 @@
       // 模型尺寸稳定后自动上报一次完整诊断 + 窗口贴合尺寸
       setTimeout(diagState, 1500);
       setTimeout(diagState, 3500);
-      setTimeout(reportModelFit, 800);
-      setTimeout(reportModelFit, 2000);
-      setTimeout(reportModelFit, 4000);
+      startFit();
     }
   }, 500);
   setTimeout(function () {

@@ -79,8 +79,9 @@ class PetWindow {
         const WindowConfiguration(arguments: 'settings', hiddenAtLaunch: true),
       );
       PetLog.i('settings: created window id=${c.windowId}');
-      // 子窗口引擎启动后由设置页负责定位/显示；这里延迟兜底显示一次
-      await Future.delayed(const Duration(milliseconds: 600));
+      // 子窗口引擎启动后由设置页负责定位/显示；这里延迟兜底显示一次。
+      // 兜底必须晚于设置页的 setSize+center（约 1s），否则窗口会先出现在默认位置再居中（抖动）。
+      await Future.delayed(const Duration(milliseconds: 2500));
       try {
         await c.show();
       } catch (_) {}

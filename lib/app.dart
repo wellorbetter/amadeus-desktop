@@ -487,6 +487,8 @@ class _PetHomeState extends State<PetHome> {
                 }),
                 item('重新加载模型', () {
                   _closePetMenu();
+                  // 重载后页面会重新上报贴合尺寸：用非动画贴合，避免窗口跳动割裂
+                  _firstFitDone = false;
                   _kurisu.reload();
                 }),
                 item('打开设置', () {
