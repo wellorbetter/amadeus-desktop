@@ -62,6 +62,7 @@ class _PetHomeState extends State<PetHome> {
   bool _inputVisible = false;
   Offset? _petMenuAt; // 桌宠右键菜单锚点（页面内坐标 CSS px）
   bool _firstFitDone = false;
+  bool _fitBusy = false; // 贴合上报并发保护（多拍上报时串行处理）
   bool _greetDone = false;
   String _lastUserText = ''; // 最近一次用户消息（用于记忆召回）
   DateTime? _lastAuditAt; // 记忆审核节流
@@ -104,7 +105,8 @@ class _PetHomeState extends State<PetHome> {
     // 托盘「设置」-> 打开独立设置窗口
     PetWindow.onOpenSettings = PetWindow.openSettingsWindow;
     // 模型就绪后按实际画布尺寸贴合窗口（启动一次）
-    _kurisu.onModelFit = _autoFitToModel;
+    _kurisu.onModelFit = (x, y, w, h, shrink) =>
+        _autoFitToModel(x, y, w, h, shrink: shrink);
     // 主动链路：数据 -> 触发引擎 -> AI -> 气泡
     _triggers.onProactive = _proactive;
     // 休眠省电：空闲休眠时暂停一切 LLM 调用，唤醒后自然问候
@@ -215,23 +217,53 @@ class _PetHomeState extends State<PetHome> {
     }
   }
 
-  /// 启动时应用窗口相关配置。
   /// 按模型实际绘制范围自动调整窗口大小（仅当开启“窗口贴合模型”）。
-  Future<void> _autoFitToModel(int x, int y, int w, int h) async {
+  /// 增长式贴合：首次贴合/模型变大时调整窗口；reload 后测量值不变或更小则只重定位、
+  /// 不缩放窗口，避免「先偏右再回正/这次变大」的跳动。
+  Future<void> _autoFitToModel(int x, int y, int w, int h,
+      {bool shrink = false}) async {
     if (!PetConfig.instance.autoFitWindow) return;
     if (w < 60 || h < 60) return;
-    const padX = 24.0; // 左右留白
-    const padTop = 132.0; // 顶部气泡区（加高，气泡不遮挡模型头部）
-    const padBottom = 10.0; // 底部留白
-    // 窗口高度固定预留底部输入区：聊天框显示/隐藏不再改变窗口尺寸（消除闪烁/遮挡）
-    final size = Size(w + padX,
-        h + padTop + padBottom + KurisuController.inputReserve);
-    PetLog.i('app: auto-fit window -> ${size.width.round()}x${size.height.round()} (model bounds ${w}x$h at $x,$y)');
-    await _applyFitToModel(x, y, w, h, size, animate: _firstFitDone);
-    _firstFitDone = true;
-    // 首帧贴合完成后才显示模型 + 问候：避免「先大后小」的启动变形
-    await _kurisu.reveal();
-    _startGreeting();
+    if (_fitBusy) {
+      PetLog.i('app: auto-fit skip (busy) bounds=${w}x$h at $x,$y');
+      return;
+    }
+    _fitBusy = true;
+    try {
+      const padX = 24.0; // 左右留白
+      const padTop = 132.0; // 顶部气泡区（加高，气泡不遮挡模型头部）
+      const padBottom = 10.0; // 底部留白
+      // 窗口高度固定预留底部输入区：聊天框显示/隐藏不再改变窗口尺寸（消除闪烁/遮挡）
+      final size = Size(w + padX,
+          h + padTop + padBottom + KurisuController.inputReserve);
+      final current = await windowManager.getSize();
+      final first = !_firstFitDone;
+      final grown = !first &&
+          (size.width > current.width + 2 || size.height > current.height + 2);
+      if (first || grown || shrink) {
+        PetLog.i(
+            'app: auto-fit resize first=$first grown=$grown shrink=$shrink bounds=${w}x$h at $x,$y -> ${size.width.round()}x${size.height.round()} (current=${current.width.round()}x${current.height.round()})');
+        await _applyFitToModel(x, y, w, h, size, animate: !first);
+        _firstFitDone = true;
+      } else {
+        // 尺寸不变：按上次贴合范围重定位（不把更小的测量值写回，防止窗口收缩/漂移）
+        final fit = _kurisu.lastFit;
+        if (fit != null) {
+          await _kurisu.fitToModel(fit.x, fit.y, fit.w, fit.h);
+          await _kurisu.layout();
+        } else {
+          await _kurisu.fitToModel(x, y, w, h);
+          await _kurisu.layout();
+        }
+        PetLog.i(
+            'app: auto-fit recenter bounds=${w}x$h current=${current.width.round()}x${current.height.round()} last=${fit == null ? '-' : '${fit.w}x${fit.h}'}');
+      }
+      // 首帧贴合完成后才显示模型 + 问候：避免「先大后小」的启动变形
+      await _kurisu.reveal();
+      _startGreeting();
+    } finally {
+      _fitBusy = false;
+    }
   }
 
   /// 执行窗口贴合：按模型实际绘制范围调整窗口尺寸并贴右下角。
@@ -487,8 +519,7 @@ class _PetHomeState extends State<PetHome> {
                 }),
                 item('重新加载模型', () {
                   _closePetMenu();
-                  // 重载后页面会重新上报贴合尺寸：用非动画贴合，避免窗口跳动割裂
-                  _firstFitDone = false;
+                  // reload 走「增长式贴合」：尺寸不变则只重定位，不缩放/不位移窗口
                   _kurisu.reload();
                 }),
                 item('打开设置', () {
@@ -564,7 +595,7 @@ class _PetHomeState extends State<PetHome> {
   /// 设置窗口保存配置后（跨窗口通道）触发的热生效。
   Future<void> _onSettingsChanged() async {
     PetLog.i('app: settings changed (remote), applying side effects');
-    final reloaded = PetConfig.instance.reloadIfChanged();
+    PetConfig.instance.reloadIfChanged(); // reload config from disk (settings-window path)
     final cfg = PetConfig.instance;
     PetSoul.instance.load(); // 人格插件热重载
     final modelBefore = _kurisu.modelFile;
@@ -576,8 +607,9 @@ class _PetHomeState extends State<PetHome> {
     await _applyRuntimeConfig();
     _kurisu.applyAppearance();
     // 模型大小或模型本体变化时重新贴合窗口（高度固定含输入区，无需额外处理输入框）
-    if (reloaded && cfg.autoFitWindow && (scaleChanged || modelChanged)) {
-      await _kurisu.requestFit();
+    if (cfg.autoFitWindow && (scaleChanged || modelChanged)) {
+      // user adjusted model size: allow window to shrink (otherwise growth-only)
+      await _kurisu.requestFit(allowShrink: true);
     }
     if (mounted) setState(() {});
   }

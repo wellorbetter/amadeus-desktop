@@ -112,6 +112,16 @@
           petLog("boot restore winCfg=" + JSON.stringify(winCfg) + " sound=" + soundCfg.enabled + "," + soundCfg.volume);
         }
       }
+      // 同时恢复上次的贴合范围：reload 后首帧即可按上次贴合定位画布，
+      // 避免「预贴合阶段画布居中导致模型偏右/裁剪」的闪动。
+      var fb = localStorage.getItem("timepet.fitBounds");
+      if (fb) {
+        var fo = JSON.parse(fb);
+        if (fo && typeof fo.x === "number" && typeof fo.y === "number" && fo.w > 10 && fo.h > 10) {
+          fitBounds = fo;
+          petLog("boot restore fitBounds=" + JSON.stringify(fo));
+        }
+      }
     } catch (_) {}
   })();
 
@@ -193,7 +203,10 @@
       + " dpr=" + window.devicePixelRatio
       + " box=" + JSON.stringify(rectJson(box))
       + " canvas=" + JSON.stringify(rectJson(canvas))
-      + " back=" + (canvas ? canvas.width + "x" + canvas.height : "-"));
+      + " back=" + (canvas ? canvas.width + "x" + canvas.height : "-")
+      + " op=" + (box ? box.style.opacity : "-")
+      + " revealed=" + revealed
+      + " fit=" + (fitBounds ? Math.round(fitBounds.w) + "x" + Math.round(fitBounds.h) : "none"));
   }
   function reportRegion(tag) {
     var canvas = document.querySelector("canvas");
@@ -292,13 +305,16 @@
     maxX = Math.min(w - 1, maxX + 1); maxY = Math.min(h - 1, maxY + 1);
     var ratioX = canvas.width / rect.width;
     var ratioY = canvas.height / rect.height;
+    // WebGL readPixels: row 0 = bottom of canvas (OpenGL), flip Y for CSS coords.
+    var cssY = (h - 1 - maxY) / ratioY;
+    var cssH = (maxY - minY + 1) / ratioY;
     return JSON.stringify({
-      px: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+      px: { x: minX, y: h - 1 - maxY, w: maxX - minX + 1, h: maxY - minY + 1 },
       css: {
         x: minX / ratioX,
-        y: minY / ratioY,
+        y: cssY,
         w: (maxX - minX + 1) / ratioX,
-        h: (maxY - minY + 1) / ratioY
+        h: cssH
       },
       count: count
     });
@@ -315,20 +331,22 @@
     scheduleFitReports();
   }
   function scheduleFitReports() {
-    setTimeout(reportModelFit, 800);
-    setTimeout(reportModelFit, 2000);
-    setTimeout(reportModelFit, 4000);
+    setTimeout(function () { reportModelFit(false, false); }, 800);
+    setTimeout(function () { reportModelFit(false, false); }, 2000);
+    setTimeout(function () { reportModelFit(false, false); }, 4000);
   }
-  function reportModelFit() {
+  // 增长式贴合上报：
+  // - fitBounds（已应用/已恢复的贴合范围）作为基线，只有测量范围明显更大时才上报，
+  //   保证 reload / 换模型后窗口尺寸稳定，不会「变小」也不会反复跳动；
+  // - force=true（requestFit）时无条件上报一次，用于让 Flutter 按当前测量重新定位；
+  // - 会话内取最大范围，避免待机动画中途扫到偏小值覆盖正确贴合。
+  function reportModelFit(force, shrink) {
     if (!fitState.active) return;
-    // 贴合已应用（fitBounds 已由 Flutter 推回）后不再重复上报：
-    // 否则会拿「贴合后的坐标」再贴合一次，把模型推偏/裁剪。
-    if (fitBounds && fitBounds.w > 10 && fitBounds.h > 10) return;
     var canvas = document.querySelector("canvas");
     if (!canvas) {
       // canvas 尚未创建（模型还在加载）：1 秒后重试，最多 10 次
       if ((fitState.retries = (fitState.retries || 0) + 1) <= 10) {
-        setTimeout(reportModelFit, 1000);
+        setTimeout(function () { reportModelFit(force, shrink); }, 1000);
       }
       return;
     }
@@ -341,7 +359,7 @@
       var cc = document.querySelector("canvas");
       petLog("model-fit retry bounds=" + b + " canvasCss=" + (cc ? cc.getBoundingClientRect().width + "x" + cc.getBoundingClientRect().height : "-"));
       if ((fitState.retries = (fitState.retries || 0) + 1) <= 10) {
-        setTimeout(reportModelFit, 1000);
+        setTimeout(function () { reportModelFit(force, shrink); }, 1000);
       } else {
         // 测量一直失败（罕见兜底）：至少让模型居中显示，避免「全透明看不见」
         petLog("model-fit give-up -> fallback center reveal");
@@ -350,16 +368,33 @@
       }
       return;
     }
-    // 取更大范围（面积比较），避免中途扫描的偏小值覆盖正确贴合
-    var cur = fitState.best;
-    if (cur && obj.css.w * obj.css.h <= cur.w * cur.h) return;
-    fitState.best = { x: obj.css.x, y: obj.css.y, w: obj.css.w, h: obj.css.h };
-    // 预留 10px 安全边距，避免待机动画导致裁剪
     var pad = 10;
-    var x = obj.css.x - pad, y = obj.css.y - pad;
-    var w = obj.css.w + pad * 2, h = obj.css.h + pad * 2;
-    petLog("model-fit bounds=" + JSON.stringify({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }));
-    postPet("model-fit x=" + Math.round(x) + " y=" + Math.round(y) + " w=" + Math.round(w) + " h=" + Math.round(h));
+    var m = {
+      x: Math.round(obj.css.x - pad),
+      y: Math.round(obj.css.y - pad),
+      w: Math.round(obj.css.w + pad * 2),
+      h: Math.round(obj.css.h + pad * 2)
+    };
+    // 会话内最大范围：中途扫到更小姿势不覆盖，避免窗口来回缩放
+    var cur = fitState.best;
+    if (!shrink && cur && cur.w * cur.h >= m.w * m.h) {
+      petLog("model-fit skip(session-smaller) m=" + JSON.stringify(m) + " best=" + JSON.stringify(cur));
+      return;
+    }
+    fitState.best = m;
+    // 基线 = 已应用/已恢复的贴合范围；只有明显更大（面积 +2%）或强制上报时才上报
+    var applied = fitBounds;
+    var grown = !applied || (m.w * m.h > applied.w * applied.h * 1.02);
+    if (!grown && !force && !shrink) {
+      petLog("model-fit skip(no-grow) m=" + JSON.stringify(m) + " applied=" + JSON.stringify(applied));
+      return;
+    }
+    petLog("model-fit report force=" + (force ? 1 : 0) + " shrink=" + (shrink ? 1 : 0) + " grown=" + (grown ? 1 : 0) + " m=" + JSON.stringify(m) + " applied=" + JSON.stringify(applied));
+    if (shrink) {
+      postPet("model-fit-shrink x=" + m.x + " y=" + m.y + " w=" + m.w + " h=" + m.h);
+    } else {
+      postPet("model-fit x=" + m.x + " y=" + m.y + " w=" + m.w + " h=" + m.h);
+    }
     reportRegion("model-fit");
   }
 
@@ -429,7 +464,7 @@
 
   // ---- 布局：居中 + 贴底 + 防裁剪 ----
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-  var fitBounds = null;
+  var fitBounds;
   function layoutContainer() {
     var box = document.getElementById("live2d-widget");
     if (!box) return false;
@@ -520,17 +555,43 @@
       var dh = Math.max(160, winCfg.displayHeight);
       canvasSize = { w: dw, h: dh };
       clearStage();
-      L2Dwidget.init({
-        model: { jsonPath: MODEL_JSON, scale: winCfg.modelScale },
-        display: {
-          superSample: 2,
-          width: dw, height: dh,
-          position: "center", hOffset: 0, vOffset: winCfg.vOffset
-        },
-        mobile: { show: true, scale: 0.5 },
-        react: { opacityDefault: 1, opacityOnHover: 1 },
-        dialog: { enable: false }
-      });
+      // live2d-widget deepmerge only sets null fields on re-init;
+      // model.scale passed to init() is ignored after the first call.
+      // Pre-write current config into the shared L2Dwidget.config
+      // so every init/reinit applies the latest scale/canvas/position.
+      var c = window.L2Dwidget && window.L2Dwidget.config;
+      if (c) {
+        c.model = c.model || {};
+        c.model.jsonPath = MODEL_JSON;
+        c.model.scale = winCfg.modelScale;
+        c.display = c.display || {};
+        c.display.superSample = 2;
+        c.display.width = dw;
+        c.display.height = dh;
+        c.display.position = "center";
+        c.display.hOffset = 0;
+        c.display.vOffset = winCfg.vOffset;
+        c.mobile = c.mobile || {};
+        c.mobile.show = true;
+        c.mobile.scale = 0.5;
+        c.react = c.react || {};
+        c.react.opacity = 0;
+        c.dialog = c.dialog || {};
+        c.dialog.enable = false;
+        L2Dwidget.init();
+      } else {
+        L2Dwidget.init({
+          model: { jsonPath: MODEL_JSON, scale: winCfg.modelScale },
+          display: {
+            superSample: 2,
+            width: dw, height: dh,
+            position: "center", hOffset: 0, vOffset: winCfg.vOffset
+          },
+          mobile: { show: true, scale: 0.5 },
+          react: { opacity: 0 },
+          dialog: { enable: false }
+        });
+      }
       petLog("L2Dwidget-init-called display=" + dw + "x" + dh + " vh=" + vh);
     } catch (err) {
       petLog("L2Dwidget-init-EXCEPTION: " + err.message);
@@ -586,6 +647,7 @@
       MODEL_JSON = next;
       fitReported = false;
       fitBounds = null;
+      try { localStorage.removeItem("timepet.fitBounds"); } catch (_) {}
       clearStage();
       var oldCanvas = document.querySelector("canvas");
       if (oldCanvas) oldCanvas.remove();
@@ -642,13 +704,17 @@
     fitToModel: function (bounds) {
       if (bounds && typeof bounds === "object" && typeof bounds.x === "number") {
         fitBounds = bounds;
+        try {
+          localStorage.setItem("timepet.fitBounds", JSON.stringify(bounds));
+        } catch (_) {}
+        petLog("fitToModel applied=" + JSON.stringify(bounds));
       }
       return true;
     },
     // 重置贴合上报并立即重新扫描（模型大小/窗口变化后调用）
-    requestFit: function () {
+    requestFit: function (allowShrink) {
       startFit();
-      reportModelFit();
+      reportModelFit(true, !!allowShrink);
       return true;
     }
   };
