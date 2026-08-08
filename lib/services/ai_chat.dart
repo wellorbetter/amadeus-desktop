@@ -8,6 +8,7 @@ class AiChat {
     String? baseUrl,
     String? model,
     double temperature = 0.8,
+    int maxTokens = 800,
   })  : _apiKey = apiKey ?? Platform.environment['DEEPSEEK_API_KEY'] ?? '',
         _baseUrl = baseUrl ??
             Platform.environment['TIMEPET_BASE_URL'] ??
@@ -15,12 +16,14 @@ class AiChat {
         _model = model ??
             Platform.environment['TIMEPET_MODEL'] ??
             'deepseek-chat',
-        _temperature = temperature;
+        _temperature = temperature,
+        _maxTokens = maxTokens;
 
   final String _apiKey;
   final String _baseUrl;
   final String _model;
   final double _temperature;
+  final int _maxTokens;
   final List<Map<String, String>> _history = [];
 
   bool get configured => _apiKey.isNotEmpty;
@@ -85,7 +88,7 @@ class AiChat {
         'messages': messages,
         'stream': onDelta != null,
         'temperature': _temperature,
-        'max_tokens': 600,
+        'max_tokens': _maxTokens,
       })));
 
       final resp = await req.close().timeout(const Duration(seconds: 120));

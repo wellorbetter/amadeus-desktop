@@ -137,7 +137,6 @@ function history(days) {
 function sendJson(res, data, status = 200) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "*",
     "cache-control": "no-store",
   });
   res.end(JSON.stringify(data));

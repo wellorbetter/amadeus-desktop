@@ -201,7 +201,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _slider('休眠阈值', '连续空闲多少分钟进入休眠（期间完全不调用 AI）。', cfg.sleepIdleMinutes.toDouble(), 5, 60, (v) {
           cfg.sleepIdleMinutes = v.round();
           _commit();
-        }, (v) => ' 分钟'),
+        }, (v) => '${v.round()} 分钟'),
       ]),
       _slider('输入框收起时长', '聊天输入框无操作多少秒后自动收起。', cfg.chatAutoHideSeconds.toDouble(), 5, 120, (v) {
         cfg.chatAutoHideSeconds = v.round();

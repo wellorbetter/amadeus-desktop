@@ -1,5 +1,5 @@
 name: timepet
-description: "TimeTrace ?? ? ????????Flutter + Rust + WebView2 Live2D?"
+description: "TimeTrace 桌宠助手：牧濑红莉栖（Flutter + WebView2 Live2D，可选接入 TimeTrace 使用数据）"
 publish_to: 'none'
 version: 0.1.0+1
 

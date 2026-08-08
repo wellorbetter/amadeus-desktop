@@ -105,7 +105,6 @@ class TriggerEngine {
         idleGrowing = _lastIdleMin >= 0 && idleNow > _lastIdleMin;
         idleReturned = _wasIdling && !idleGrowing && _lastIdleMin >= 0;
         _wasIdling = idleGrowing || (_lastIdleMin < 0 && idleNow > 0);
-        _lastIdleMin = idleNow;
 
         // 连续空闲分钟数（近似：tick=60s，空闲分钟持续增长即视为持续空闲）
         if (idleGrowing) {
@@ -115,6 +114,7 @@ class TriggerEngine {
         } else {
           _idleStreakTicks = 0;
         }
+        _lastIdleMin = idleNow;
 
         // 休眠省电：连续空闲达到阈值后停止一切主动对话（LLM 零调用）
         if (cfg.sleepEnabled) {

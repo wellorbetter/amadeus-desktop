@@ -89,6 +89,7 @@ class _PetHomeState extends State<PetHome> {
       baseUrl: cfg.aiBaseUrl,
       model: cfg.aiModel,
       temperature: cfg.aiTemperature,
+      maxTokens: cfg.aiMaxTokens,
     );
     _aiReady = _aiActive;
     _lastModelScale = cfg.modelScale; // 记录初始缩放，供设置变更时对比是否需重新贴合窗口

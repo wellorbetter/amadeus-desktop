@@ -59,6 +59,7 @@ class PetConfig {
   String aiModel = 'deepseek-chat';
   String soulFile = ''; // 人格插件 soul.md 路径（留空自动检测 %APPDATA%/timepet/soul.md 或 exe 目录/soul.md）
   double aiTemperature = 0.8;
+  int aiMaxTokens = 800; // AI 单次回复最大 token 数（防长回复截断）
 
   // ---- 日志 ----
   bool logEnabled = true;
@@ -124,6 +125,7 @@ class PetConfig {
           'baseUrl': 'https://api.deepseek.com/v1',
           'model': 'deepseek-chat',
           'temperature': 0.8,
+          'maxTokens': 800,
           'soulFile': '',
         },
         'log': {
@@ -226,6 +228,7 @@ class PetConfig {
           'baseUrl': aiBaseUrl,
           'model': aiModel,
           'temperature': aiTemperature,
+          'maxTokens': aiMaxTokens,
           'soulFile': soulFile,
         },
         'log': {
@@ -236,6 +239,7 @@ class PetConfig {
           'alwaysOnTop': alwaysOnTop,
           'skipTaskbar': skipTaskbar,
           'startVisible': startVisible,
+          'autoFitWindow': autoFitWindow,
         },
       };
 
@@ -291,6 +295,7 @@ class PetConfig {
       aiBaseUrl = ai['baseUrl']?.toString() ?? 'https://api.deepseek.com/v1';
       aiModel = ai['model']?.toString() ?? 'deepseek-chat';
       aiTemperature = (ai['temperature'] as num?)?.toDouble() ?? 0.8;
+      aiMaxTokens = (ai['maxTokens'] as num?)?.toInt() ?? 800;
       soulFile = ai['soulFile']?.toString() ?? '';
     }
     final lg = json['log'];
