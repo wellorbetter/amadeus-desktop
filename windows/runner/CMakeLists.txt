@@ -38,3 +38,13 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+# webview_windows plugin runtime dependency: copy WebView2Loader.dll next to
+# the exe, otherwise the app fails to start with 0xC0000135 (DLL not found).
+if(EXISTS "${CMAKE_BINARY_DIR}/packages/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll")
+  add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_BINARY_DIR}/packages/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll"
+      "$<TARGET_FILE_DIR:${BINARY_NAME}>/WebView2Loader.dll"
+    COMMENT "Copying WebView2Loader.dll next to ${BINARY_NAME}"
+  )
+endif()
