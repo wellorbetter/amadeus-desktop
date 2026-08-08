@@ -45,6 +45,9 @@ function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_definitions(${TARGET} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")
 endfunction()
 
+# webview_windows GPU texture path conflicts with Windows SDK 10.0.19041 cppwinrt
+# ("wait_for is not a member of winrt::impl"). Use the PixelBuffer fallback path.
+set(FLUTTER_WEBVIEW_WINDOWS_USE_TEXTURE_FALLBACK ON)
 # Flutter library and tool build rules.
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})
@@ -70,6 +73,11 @@ if(TARGET webview_windows_plugin)
     "${CMAKE_BINARY_DIR}/packages/Microsoft.Windows.ImplementationLibrary/build/native/Microsoft.Windows.ImplementationLibrary.targets")
   list(APPEND _wvw_link "${CMAKE_BINARY_DIR}/packages/Microsoft.Web.WebView2/build/native/x64/WebView2Loader.dll.lib")
   set_target_properties(webview_windows_plugin PROPERTIES LINK_LIBRARIES "${_wvw_link}")
+  # cppwinrt from Windows SDK 10.0.19041 misses the winrt::impl::wait_for
+  # declaration before winrt/impl/Windows.Foundation.0.h consumes it, which
+  # breaks C++20 two-phase lookup. Force-include a forward declaration.
+  target_compile_options(webview_windows_plugin PRIVATE
+    "/FI${CMAKE_CURRENT_SOURCE_DIR}/winrt_wait_for_compat.h")
 endif()
 
 # === Installation ===
