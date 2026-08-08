@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TimePet</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: transparent; overflow: hidden;
+    user-select: none; -webkit-user-select: none;
+  }
+  #l2d {
+    position: fixed; inset: 0;
+    display: flex; align-items: flex-end; justify-content: center;
+  }
+  #l2d canvas { pointer-events: auto !important; }
+  #fallback {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 78%; padding: 14px 16px; border-radius: 10px;
+    background: rgba(20, 24, 40, 0.86); color: #e6e9f5;
+    font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all;
+    display: none; box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+  }
+</style>
+</head>
+<body>
+<div id="l2d"></div>
+<div id="fallback"></div>
+
+<script src="vendor/live2d-widget/lib/L2Dwidget.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  // 模型地址由 Flutter 注入：kurisu.html?model=<文件名>，虚拟主机 model.local 映射到模型所在目录
+  var MODEL_JSON = null;
+  (function () {
+    try {
+      var m = new URLSearchParams(location.search).get("model");
+      if (m) MODEL_JSON = "https://model.local/" + m;
+    } catch (_) {}
+  })();
+
+  // 默认外观（可被 Flutter 通过 pet.applyAppearance 动态覆盖）
+  var winCfg = {
+    displayWidth: 440,
+    displayHeight: 640,
+    hOffset: 0,
+    vOffset: 10,
+    modelScale: 1,
+    modelOpacity: 1,
+    inputReserve: 84
+  };
+
+  // 音效状态（可由 Flutter 通过 pet.applyAppearance 动态覆盖）
+  var soundCfg = { enabled: false, volume: 0.8 };
+
+  // ---- 状态上报（供 Flutter 侧日志排查）----
+  window.__petLog = [];
+  function petLog(msg) {
+    window.__petLog.push(msg);
+    try {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage("[pet] " + msg);
+      }
+    } catch (_) {}
+  }
+  window.addEventListener("error", function (e) {
+    petLog("JS-ERROR: " + (e.message || "") + " @ " + (e.filename || "") + ":" + (e.lineno || ""));
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    petLog("PROMISE-REJECT: " + ((e.reason && e.reason.message) || e.reason));
+  });
+
+  petLog("script-boot ua=" + navigator.userAgent + " inner=" + window.innerWidth + "x" + window.innerHeight + " dpr=" + window.devicePixelRatio + " model=" + (MODEL_JSON || "none"));
+
+  // 无模型/加载失败的兜底提示
+  function showFallback(msg) {
+    var el = document.getElementById("fallback");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.style.display = "block";
+    petLog("fallback: " + msg);
+  }
+  function hideFallback() {
+    var el = document.getElementById("fallback");
+    if (el) el.style.display = "none";
+  }
+
+  // ---- 模型音效（动作自带的 mp3）----
+  // 精简版 L2Dwidget 没有音频引擎，这里自行读取模型 motions 里的 sound 引用并播放：
+  // 拍头/点头等动作自带音效（如 kurisu 的 sounds/*.mp3），没有音效的模型则保持无声。
+  var soundMap = {}; // 动作组 -> [sound 相对路径]
+  var soundBase = ""; // 模型 json 所在目录
+  function loadSoundMap() {
+    soundMap = {};
+    if (!MODEL_JSON) return;
+    soundBase = MODEL_JSON.replace(/[^/]*$/, "");
+    fetch(MODEL_JSON, { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (cfg) {
+        if (!cfg || !cfg.motions) return;
+        Object.keys(cfg.motions).forEach(function (group) {
+          var list = [];
+          (cfg.motions[group] || []).forEach(function (m) {
+            if (m && m.sound) list.push(m.sound);
+          });
+          if (list.length) soundMap[group] = list;
+        });
+        petLog("sound-map groups=" + JSON.stringify(Object.keys(soundMap)));
+      })
+      .catch(function (e) { petLog("sound-map-error " + ((e && e.message) || e)); });
+  }
+  function playSound(group) {
+    if (!soundCfg.enabled) return;
+    var list = soundMap[group];
+    if (!list || !list.length) return;
+    var src = soundBase + list[Math.floor(Math.random() * list.length)];
+    try {
+      var a = new Audio(src);
+      a.volume = Math.max(0, Math.min(1, soundCfg.volume));
+      a.play().catch(function () {});
+      petLog("sound " + group + " -> " + src);
+    } catch (e) {
+      petLog("sound-error " + ((e && e.message) || e));
+    }
+  }
+  // 全局音量钩子：任何媒体元素播放前统一应用开关与音量（兼容未来音频来源）
+  (function () {
+    function applyVol(el) {
+      try {
+        el.volume = soundCfg.enabled ? Math.max(0, Math.min(1, soundCfg.volume)) : 0;
+      } catch (_) {}
+    }
+    var origPlay = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () {
+      applyVol(this);
+      return origPlay.apply(this, arguments);
+    };
+  })();
+
+  // 几何上报：viewport / 容器 / canvas 实际布局
+  function rectJson(el) {
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    return { l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  }
+  function reportGeometry(tag) {
+    var box = document.getElementById("live2d-widget");
+    var canvas = document.querySelector("canvas");
+    petLog("geo " + tag + " inner=" + window.innerWidth + "x" + window.innerHeight
+      + " dpr=" + window.devicePixelRatio
+      + " box=" + JSON.stringify(rectJson(box))
+      + " canvas=" + JSON.stringify(rectJson(canvas))
+      + " back=" + (canvas ? canvas.width + "x" + canvas.height : "-"));
+  }
+  function reportRegion(tag) {
+    var canvas = document.querySelector("canvas");
+    var b = modelBounds();
+    var mb = null;
+    if (typeof b === "string" && b.indexOf("{") === 0) {
+      try { mb = JSON.parse(b); } catch (_) {}
+    }
+    var info = { tag: tag, inner: window.innerWidth + "x" + window.innerHeight };
+    if (canvas) {
+      var r = canvas.getBoundingClientRect();
+      info.canvas = { l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+      if (mb && mb.css) {
+        info.model = { l: Math.round(mb.css.x), t: Math.round(mb.css.y), w: Math.round(mb.css.w), h: Math.round(mb.css.h) };
+      }
+    }
+    petLog("region " + tag + " " + JSON.stringify(info));
+  }
+  window.addEventListener("resize", function () { reportGeometry("resize"); });
+  window.addEventListener("load", function () { setTimeout(function () { reportGeometry("load"); }, 500); });
+
+  // 区域诊断：各绘制区域真实几何与像素状态
+  function probeAt(x, y) {
+    var el = document.elementFromPoint(x, y);
+    if (!el) return "null";
+    var r = el.getBoundingClientRect();
+    return (el.id || el.tagName) + " rect=" + JSON.stringify({ l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }) + " style.pos=" + getComputedStyle(el).position;
+  }
+  function webglCorners() {
+    var c = document.querySelector("canvas");
+    if (!c) return "-";
+    var gl = c.getContext("webgl") || c.getContext("experimental-webgl") || c.getContext("webgl2");
+    if (!gl) return "no-ctx";
+    var px = new Uint8Array(4);
+    function rd(x, y) {
+      try { gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return Array.from(px); }
+      catch (e) { return "err:" + e.message; }
+    }
+    return JSON.stringify({
+      bl: rd(0, 0),
+      br: rd(c.width - 1, 0),
+      tl: rd(0, c.height - 1),
+      tr: rd(c.width - 1, c.height - 1),
+      mid: rd(Math.floor(c.width / 2), Math.floor(c.height / 2))
+    });
+  }
+  function diagState() {
+    var canvas = document.querySelector("canvas");
+    var box = document.getElementById("live2d-widget");
+    var out = {
+      inner: window.innerWidth + "x" + window.innerHeight,
+      dpr: window.devicePixelRatio,
+      l2d: JSON.stringify(rectJson(document.getElementById("l2d"))),
+      box: JSON.stringify(rectJson(box)),
+      canvas: JSON.stringify(rectJson(canvas)),
+      canvasAttr: canvas ? canvas.width + "x" + canvas.height : "-",
+      canvasStylePos: canvas ? getComputedStyle(canvas).position : "-",
+      webgl: webglCorners(),
+      modelBounds: modelBounds()
+    };
+    petLog("diag " + JSON.stringify(out));
+    return JSON.stringify(out);
+  }
+
+  // 模型实际绘制范围（像素级扫描；像素/CSS 比例按 canvas 实际尺寸动态计算）
+  function modelBounds() {
+    var canvas = document.querySelector("canvas");
+    if (!canvas) return null;
+    var rect = canvas.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return null;
+    var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl") || canvas.getContext("webgl2");
+    if (!gl) return null;
+    var w = canvas.width, h = canvas.height;
+    var px = new Uint8Array(w * h * 4);
+    try {
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    } catch (e) { return "err:" + e.message; }
+    var minX = w, minY = h, maxX = -1, maxY = -1, count = 0;
+    for (var yy = 0; yy < h; yy++) {
+      var row = yy * w * 4;
+      for (var xx = 0; xx < w; xx++) {
+        var o = row + xx * 4;
+        if (px[o + 3] > 8) {
+          if (xx < minX) minX = xx;
+          if (xx > maxX) maxX = xx;
+          if (yy < minY) minY = yy;
+          if (yy > maxY) maxY = yy;
+          count++;
+        }
+      }
+    }
+    if (maxX < 0) return "empty";
+    var ratioX = canvas.width / rect.width;
+    var ratioY = canvas.height / rect.height;
+    return JSON.stringify({
+      px: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+      css: {
+        x: rect.left + minX / ratioX,
+        y: rect.top + minY / ratioY,
+        w: (maxX - minX + 1) / ratioX,
+        h: (maxY - minY + 1) / ratioY
+      },
+      count: count
+    });
+  }
+
+  // 模型实际画布尺寸上报：用于 Flutter 侧"窗口贴合模型"（一次即可，取首次有效值）
+  var fitReported = false;
+  function reportModelFit() {
+    if (fitReported) return;
+    var canvas = document.querySelector("canvas");
+    if (!canvas) return;
+    var b = modelBounds();
+    var obj = null;
+    if (typeof b === "string" && b.indexOf("{") === 0) {
+      try { obj = JSON.parse(b); } catch (_) {}
+    }
+    if (!obj || !obj.css || obj.css.w < 20 || obj.css.h < 20) {
+      petLog("model-fit retry bounds=" + b);
+      return;
+    }
+    // 预留 10px 安全边距，避免待机动画导致裁剪
+    var pad = 10;
+    var x = obj.css.x - pad, y = obj.css.y - pad;
+    var w = obj.css.w + pad * 2, h = obj.css.h + pad * 2;
+    fitReported = true;
+    petLog("model-fit bounds=" + JSON.stringify({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }));
+    postPet("model-fit x=" + Math.round(x) + " y=" + Math.round(y) + " w=" + Math.round(w) + " h=" + Math.round(h));
+    reportRegion("model-fit");
+  }
+
+  // 交互区分：按下后位移超过阈值 = 拖动窗口；否则 = 点击（弹出聊天框）
+  var dragState = { x: 0, y: 0, active: false, dragged: false };
+  var lastProgrammaticClick = 0;
+  function postPet(msg) {
+    try {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage("[pet] " + msg);
+      }
+    } catch (_) {}
+  }
+  document.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    dragState = { x: e.clientX, y: e.clientY, active: true, dragged: false };
+  });
+  document.addEventListener("mousemove", function (e) {
+    if (!dragState.active || dragState.dragged) return;
+    var dx = e.clientX - dragState.x, dy = e.clientY - dragState.y;
+    if (dx * dx + dy * dy > 64) { // 8px 阈值
+      dragState.dragged = true;
+      petLog("drag-start dx=" + Math.round(dx) + " dy=" + Math.round(dy));
+      postPet("drag");
+    }
+  });
+  document.addEventListener("contextmenu", function (e) {
+    e.preventDefault();
+    postPet("user-menu " + Math.round(e.clientX) + " " + Math.round(e.clientY));
+  });
+  document.addEventListener("mouseup", function (e) {
+    if (e.button !== 0) return;
+    if (!dragState.active) return;
+    var wasDrag = dragState.dragged;
+    dragState.active = false;
+    if (wasDrag) return;
+    if (Date.now() - lastProgrammaticClick < 200) {
+      lastProgrammaticClick = 0;
+      return;
+    }
+    postPet("user-tap");
+  });
+  document.addEventListener("touchstart", function (e) {
+    dragState = { x: e.touches[0].clientX, y: e.touches[0].clientY, active: true, dragged: false };
+  });
+  document.addEventListener("touchmove", function (e) {
+    if (!dragState.active || dragState.dragged) return;
+    var t = e.touches[0];
+    var dx = t.clientX - dragState.x, dy = t.clientY - dragState.y;
+    if (dx * dx + dy * dy > 64) {
+      dragState.dragged = true;
+      postPet("drag");
+    }
+  });
+  document.addEventListener("touchend", function (e) {
+    if (!dragState.active) return;
+    var wasDrag = dragState.dragged;
+    dragState.active = false;
+    if (wasDrag) return;
+    if (Date.now() - lastProgrammaticClick < 200) {
+      lastProgrammaticClick = 0;
+      return;
+    }
+    if (window.pet) window.pet.randomReact();
+    postPet("user-tap");
+  });
+
+  // ---- 布局：居中 + 贴底 + 防裁剪 ----
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  var fitBounds = null;
+  function layoutContainer() {
+    var box = document.getElementById("live2d-widget");
+    if (!box) return false;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var dw = winCfg.displayWidth || 440;
+    var dh = winCfg.displayHeight || 640;
+    if (fitBounds && fitBounds.w > 10 && fitBounds.h > 10) {
+      // 模型水平居中、底部按 vOffset 留空；画布可能超出窗口（被裁剪）
+      var left = (vw - fitBounds.w) / 2 - fitBounds.x;
+      var top = vh - fitBounds.h - (winCfg.vOffset || 0) - fitBounds.y - (winCfg.inputReserve || 0);
+      box.style.left = left + "px";
+      box.style.transform = "none";
+      box.style.top = top + "px";
+      box.style.width = dw + "px";
+      box.style.height = dh + "px";
+      box.style.bottom = "auto";
+      box.style.opacity = revealed ? winCfg.modelOpacity : 0;
+      var canvas = document.querySelector("canvas");
+      if (canvas) {
+        canvas.style.width = dw + "px";
+        canvas.style.height = dh + "px";
+      }
+      reportGeometry("layout-fit");
+      reportRegion("layout-fit");
+      return true;
+    }
+    dw = clamp(dw, 160, vw);
+    dh = clamp(dh, 160, vh);
+    box.style.left = "50%";
+    box.style.transform = "translateX(-50%)";
+    box.style.width = dw + "px";
+    box.style.height = dh + "px";
+    box.style.top = Math.max(0, vh - dh - (winCfg.vOffset || 0) - (winCfg.inputReserve || 0)) + "px";
+    box.style.bottom = "auto";
+    box.style.opacity = revealed ? winCfg.modelOpacity : 0;
+    var canvas = document.querySelector("canvas");
+    if (canvas) {
+      canvas.style.width = dw + "px";
+      canvas.style.height = dh + "px";
+    }
+    reportGeometry("layout");
+    reportRegion("layout");
+    return true;
+  }
+
+  // 首帧贴合完成前模型隐藏（避免启动变形），由 Flutter 在贴合完成后调用 reveal()
+  var revealed = false;
+  function reveal() {
+    if (revealed) return;
+    revealed = true;
+    var box = document.getElementById("live2d-widget");
+    if (box) {
+      box.style.transition = "opacity .3s ease";
+      box.style.opacity = winCfg.modelOpacity;
+    }
+    petLog("reveal opacity=" + winCfg.modelOpacity);
+  }
+
+  function clearStage() {
+    var stage = document.getElementById("l2d");
+    while (stage.firstChild) stage.removeChild(stage.firstChild);
+  }
+
+  // ---- 加载器：Cubism 2.1（live2d-widget）----
+  function bootL2d() {
+    if (!window.L2Dwidget) { petLog("L2Dwidget-missing-retry"); setTimeout(boot, 200); return; }
+    petLog("L2Dwidget-found");
+    try {
+      var vw = window.innerWidth, vh = window.innerHeight;
+      var dw = Math.max(160, Math.min(winCfg.displayWidth, vw));
+      var dh = Math.max(160, Math.min(winCfg.displayHeight, vh));
+      clearStage();
+      L2Dwidget.init({
+        model: { jsonPath: MODEL_JSON, scale: winCfg.modelScale },
+        display: {
+          superSample: 2,
+          width: dw, height: dh,
+          position: "center", hOffset: 0, vOffset: winCfg.vOffset
+        },
+        mobile: { show: true, scale: 0.5 },
+        react: { opacityDefault: 1, opacityOnHover: 1 },
+        dialog: { enable: false }
+      });
+      petLog("L2Dwidget-init-called display=" + dw + "x" + dh + " vh=" + vh);
+    } catch (err) {
+      petLog("L2Dwidget-init-EXCEPTION: " + err.message);
+      showFallback("Live2D 初始化异常：" + err.message);
+    }
+  }
+
+  function boot() {
+    if (!MODEL_JSON) {
+      showFallback("未检测到模型文件。\n请把 Cubism 2.1 的 Live2D 模型文件夹放到程序目录下的 models/ 中（如 models/我的角色/kurisu.model.json），\n然后在设置里填写模型路径或重启程序。");
+      return;
+    }
+    if (/\.model3\.json$/i.test(MODEL_JSON)) {
+      petLog("boot-route model3-unsupported path=" + MODEL_JSON);
+      showFallback("暂不支持 Cubism 5（model3.json）模型格式。\n请使用 Cubism 2.1（.model.json）格式的模型，放置到 models/ 目录后重启程序。");
+      return;
+    }
+    petLog("boot-route l2d path=" + MODEL_JSON);
+    loadSoundMap();
+    bootL2d();
+  }
+
+  // ---- 模型控制接口（由 Flutter 通过 executeScript 调用）----
+  window.pet = {
+    // 播放动作：tap_body / flick_head / shake / pinch_in / pinch_out
+    motion: function (name) {
+      var canvas = document.querySelector("canvas");
+      if (!canvas) return false;
+      var pos = { tap_body: [0.5, 0.68], flick_head: [0.9, 0.5], shake: [0.1, 0.5], pinch_in: [0.5, 0.9], pinch_out: [0.5, 0.9] }[name] || [0.5, 0.68];
+      fireClick(canvas, pos[0], pos[1]);
+      playSound(name);
+      return true;
+    },
+    // 切换表情（随机）
+    // 随机互动：随机动作 + 概率表情（点击 / 空闲 / 右键菜单调用）
+    randomReact: function () {
+      var names = ["tap_body", "flick_head", "shake", "pinch_in", "pinch_out"];
+      var name = names[Math.floor(Math.random() * names.length)];
+      window.pet.motion(name);
+      if (Math.random() < 0.5) window.pet.expression();
+      return true;
+    },
+    expression: function () {
+      var canvas = document.querySelector("canvas");
+      if (!canvas) return false;
+      fireClick(canvas, 0.5, 0.22);
+      return true;
+    },
+    // 动态切换模型（Flutter 侧在模型路径变化时调用）
+    setModel: function (file) {
+      var next = file ? "https://model.local/" + file : null;
+      if (next === MODEL_JSON) return true;
+      MODEL_JSON = next;
+      fitReported = false;
+      clearStage();
+      var oldCanvas = document.querySelector("canvas");
+      if (oldCanvas) oldCanvas.remove();
+      petLog("setModel -> " + (MODEL_JSON || "none"));
+      if (!MODEL_JSON) { showFallback("模型路径为空。"); return true; }
+      hideFallback();
+      boot();
+      loadSoundMap();
+      return true;
+    },
+    // 动态应用外观（设置面板调用）
+    applyAppearance: function (opts) {
+      if (opts && typeof opts === "object") {
+        if (typeof opts.displayWidth === "number") winCfg.displayWidth = opts.displayWidth;
+        if (typeof opts.displayHeight === "number") winCfg.displayHeight = opts.displayHeight;
+        if (typeof opts.hOffset === "number") winCfg.hOffset = opts.hOffset;
+        if (typeof opts.vOffset === "number") winCfg.vOffset = opts.vOffset;
+        if (typeof opts.modelScale === "number") winCfg.modelScale = opts.modelScale;
+        if (typeof opts.modelOpacity === "number") winCfg.modelOpacity = opts.modelOpacity;
+        if (typeof opts.inputReserve === "number") winCfg.inputReserve = opts.inputReserve;
+        if (typeof opts.soundEnabled === "boolean") soundCfg.enabled = opts.soundEnabled;
+        if (typeof opts.soundVolume === "number") soundCfg.volume = opts.soundVolume;
+      }
+      layoutContainer();
+      return true;
+    },
+    layout: function () { layoutContainer(); return true; },
+    reveal: function () { reveal(); return true; },
+    ready: function () { return !!document.querySelector("canvas"); },
+    diag: function () { return diagState(); },
+    modelBounds: function () { return modelBounds(); },
+    fitToModel: function (bounds) {
+      if (bounds && typeof bounds === "object" && typeof bounds.x === "number") {
+        fitBounds = bounds;
+      }
+      return true;
+    },
+    // 重置贴合上报并立即重新扫描（模型大小/窗口变化后调用）
+    requestFit: function () {
+      fitReported = false;
+      reportModelFit();
+      setTimeout(reportModelFit, 600);
+      setTimeout(reportModelFit, 1500);
+      return true;
+    }
+  };
+
+  function fireClick(el, fx, fy) {
+    lastProgrammaticClick = Date.now();
+    var r = el.getBoundingClientRect();
+    var x = r.left + r.width * fx;
+    var y = r.top + r.height * fy;
+    var opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    el.dispatchEvent(new MouseEvent("click", opts));
+  }
+
+  // 轮询 canvas 是否创建（模型加载成功标志），并应用居中布局
+  var canvasFound = false;
+  var poll = setInterval(function () {
+    var c = document.querySelector("canvas");
+    if (c) {
+      canvasFound = true;
+      var fresh = document.createElement("canvas");
+      var glOk = false;
+      try { glOk = !!(fresh.getContext("webgl") || fresh.getContext("experimental-webgl")); } catch (_) {}
+      petLog("canvas-created " + c.width + "x" + c.height + " fresh-webgl=" + glOk);
+      layoutContainer();
+      clearInterval(poll);
+      // 模型尺寸稳定后自动上报一次完整诊断 + 窗口贴合尺寸
+      setTimeout(diagState, 1500);
+      setTimeout(diagState, 3500);
+      setTimeout(reportModelFit, 800);
+      setTimeout(reportModelFit, 2000);
+      setTimeout(reportModelFit, 4000);
+    }
+  }, 500);
+  setTimeout(function () {
+    clearInterval(poll);
+    if (!canvasFound) {
+      petLog("canvas-poll-timeout");
+      if (!MODEL_JSON) showFallback("未检测到模型文件。\n请把 Cubism 2.1 的 Live2D 模型文件夹放到程序目录下的 models/ 中，\n然后在设置里填写模型路径或重启程序。");
+    }
+  }, 15000);
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>

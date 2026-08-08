@@ -1,0 +1,30 @@
+# Dart / Flutter
+.dart_tool/
+.pub-cache/
+.pub/
+build/
+.flutter-plugins-dependencies
+.metadata
+
+# Windows runner generated
+windows/flutter/ephemeral/
+windows/flutter/generated_plugin_registrant.cc
+windows/flutter/generated_plugin_registrant.h
+windows/flutter/generated_plugins.cmake
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# ??????????????????????
+/models/
+/soul.md

@@ -1,0 +1,32 @@
+name: timepet
+description: "TimeTrace ?? ? ????????Flutter + Rust + WebView2 Live2D?"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  desktop_multi_window: ^0.3.0
+  flutter:
+    sdk: flutter
+  flutter_acrylic: ^1.1.4
+  screen_retriever: ^0.2.2
+  sqlite3: ^3.5.1
+  sqlite3_flutter_libs: ^0.6.0+eol
+  tray_manager: ^0.5.3
+  webview_windows: ^0.4.0
+  window_manager: ^0.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/web/
+    - assets/web/vendor/live2d-widget/lib/
+    - assets/tray/
+    - assets/bridge/
