@@ -75,6 +75,46 @@
 
   petLog("script-boot ua=" + navigator.userAgent + " inner=" + window.innerWidth + "x" + window.innerHeight + " dpr=" + window.devicePixelRatio + " model=" + (MODEL_JSON || "none"));
 
+  // 强制 WebGL 保留绘制缓冲：否则模型渲染帧在合成后被清空，
+  // modelBounds() 的 readPixels 会读到空 buffer（模型其实在，但测量不到）。
+  // 桌宠画布小 + FPS 上限 30，保留缓冲的额外开销可忽略。
+  (function () {
+    var _origGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type) {
+      var t = String(type).toLowerCase();
+      if (t === "webgl" || t === "experimental-webgl" || t === "webgl2") {
+        var attrs = (arguments.length > 1 && typeof arguments[1] === "object" && arguments[1]) ? arguments[1] : {};
+        attrs.preserveDrawingBuffer = true;
+        return _origGetContext.call(this, type, attrs);
+      }
+      return _origGetContext.apply(this, arguments);
+    };
+  })();
+
+  // 画布尺寸记录：L2Dwidget 初始化时按 displayWidth x displayHeight 创建。
+  // layoutContainer 始终用这个尺寸设置 canvas CSS，避免窗口变化时拉伸变形。
+  var canvasSize = null;
+
+  // 外观配置持久化：location.reload() 会把页面 JS 状态重置为默认值
+  // （modelScale 1.44→1、vOffset 27→10），导致重新加载后模型比例/位置漂移。
+  // 从 localStorage 恢复上次外观，让 reload 前后保持一致。
+  (function () {
+    try {
+      var saved = localStorage.getItem("timepet.winCfg");
+      if (saved) {
+        var o = JSON.parse(saved);
+        if (o && typeof o === "object") {
+          for (var k in o) {
+            if (k in winCfg && typeof o[k] === "number") winCfg[k] = o[k];
+          }
+          if (typeof o.soundEnabled === "boolean") soundCfg.enabled = o.soundEnabled;
+          if (typeof o.soundVolume === "number") soundCfg.volume = o.soundVolume;
+          petLog("boot restore winCfg=" + JSON.stringify(winCfg) + " sound=" + soundCfg.enabled + "," + soundCfg.volume);
+        }
+      }
+    } catch (_) {}
+  })();
+
   // 无模型/加载失败的兜底提示
   function showFallback(msg) {
     var el = document.getElementById("fallback");
@@ -232,9 +272,10 @@
       gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
     } catch (e) { return "err:" + e.message; }
     var minX = w, minY = h, maxX = -1, maxY = -1, count = 0;
-    for (var yy = 0; yy < h; yy++) {
+    // 每 2px 隔行采样（8 位 alpha 判断足够），减少大画布的处理量
+    for (var yy = 0; yy < h; yy += 2) {
       var row = yy * w * 4;
-      for (var xx = 0; xx < w; xx++) {
+      for (var xx = 0; xx < w; xx += 2) {
         var o = row + xx * 4;
         if (px[o + 3] > 8) {
           if (xx < minX) minX = xx;
@@ -246,13 +287,16 @@
       }
     }
     if (maxX < 0) return "empty";
+    // 采样步进 2px，边界外扩 1px 修正贴边少测
+    minX = Math.max(0, minX - 1); minY = Math.max(0, minY - 1);
+    maxX = Math.min(w - 1, maxX + 1); maxY = Math.min(h - 1, maxY + 1);
     var ratioX = canvas.width / rect.width;
     var ratioY = canvas.height / rect.height;
     return JSON.stringify({
       px: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
       css: {
-        x: rect.left + minX / ratioX,
-        y: rect.top + minY / ratioY,
+        x: minX / ratioX,
+        y: minY / ratioY,
         w: (maxX - minX + 1) / ratioX,
         h: (maxY - minY + 1) / ratioY
       },
@@ -277,6 +321,9 @@
   }
   function reportModelFit() {
     if (!fitState.active) return;
+    // 贴合已应用（fitBounds 已由 Flutter 推回）后不再重复上报：
+    // 否则会拿「贴合后的坐标」再贴合一次，把模型推偏/裁剪。
+    if (fitBounds && fitBounds.w > 10 && fitBounds.h > 10) return;
     var canvas = document.querySelector("canvas");
     if (!canvas) {
       // canvas 尚未创建（模型还在加载）：1 秒后重试，最多 10 次
@@ -291,9 +338,15 @@
       try { obj = JSON.parse(b); } catch (_) {}
     }
     if (!obj || !obj.css || obj.css.w < 20 || obj.css.h < 20) {
-      petLog("model-fit retry bounds=" + b);
+      var cc = document.querySelector("canvas");
+      petLog("model-fit retry bounds=" + b + " canvasCss=" + (cc ? cc.getBoundingClientRect().width + "x" + cc.getBoundingClientRect().height : "-"));
       if ((fitState.retries = (fitState.retries || 0) + 1) <= 10) {
         setTimeout(reportModelFit, 1000);
+      } else {
+        // 测量一直失败（罕见兜底）：至少让模型居中显示，避免「全透明看不见」
+        petLog("model-fit give-up -> fallback center reveal");
+        layoutContainer();
+        reveal();
       }
       return;
     }
@@ -383,6 +436,9 @@
     var vw = window.innerWidth, vh = window.innerHeight;
     var dw = winCfg.displayWidth || 440;
     var dh = winCfg.displayHeight || 640;
+    // 画布 CSS 尺寸始终等于 L2Dwidget 初始化尺寸，避免拉伸变形
+    var cw = (canvasSize && canvasSize.w) || dw;
+    var ch = (canvasSize && canvasSize.h) || dh;
     if (fitBounds && fitBounds.w > 10 && fitBounds.h > 10) {
       // 模型水平居中、底部按 vOffset 留空；画布可能超出窗口（被裁剪）
       var left = (vw - fitBounds.w) / 2 - fitBounds.x;
@@ -390,14 +446,14 @@
       box.style.left = left + "px";
       box.style.transform = "none";
       box.style.top = top + "px";
-      box.style.width = dw + "px";
-      box.style.height = dh + "px";
+      box.style.width = cw + "px";
+      box.style.height = ch + "px";
       box.style.bottom = "auto";
       box.style.opacity = revealed ? winCfg.modelOpacity : 0;
       var canvas = document.querySelector("canvas");
       if (canvas) {
-        canvas.style.width = dw + "px";
-        canvas.style.height = dh + "px";
+        canvas.style.width = cw + "px";
+        canvas.style.height = ch + "px";
       }
       reportGeometry("layout-fit");
       reportRegion("layout-fit");
@@ -407,15 +463,15 @@
     dh = clamp(dh, 160, vh);
     box.style.left = "50%";
     box.style.transform = "translateX(-50%)";
-    box.style.width = dw + "px";
-    box.style.height = dh + "px";
+    box.style.width = cw + "px";
+    box.style.height = ch + "px";
     box.style.top = Math.max(0, vh - dh - (winCfg.vOffset || 0) - (winCfg.inputReserve || 0)) + "px";
     box.style.bottom = "auto";
     box.style.opacity = revealed ? winCfg.modelOpacity : 0;
     var canvas = document.querySelector("canvas");
     if (canvas) {
-      canvas.style.width = dw + "px";
-      canvas.style.height = dh + "px";
+      canvas.style.width = cw + "px";
+      canvas.style.height = ch + "px";
     }
     reportGeometry("layout");
     reportRegion("layout");
@@ -447,6 +503,7 @@
     var oldCanvas = document.querySelector("canvas");
     if (oldCanvas) oldCanvas.remove();
     fitState.active = false; // 停止旧的上报阶段
+    fitBounds = null; // 尺寸变化后需要重新贴合，清掉旧贴合范围
     boot();
     startFit();
   }
@@ -457,8 +514,11 @@
     petLog("L2Dwidget-found");
     try {
       var vw = window.innerWidth, vh = window.innerHeight;
-      var dw = Math.max(160, Math.min(winCfg.displayWidth, vw));
-      var dh = Math.max(160, Math.min(winCfg.displayHeight, vh));
+      // 画布固定为 displayWidth x displayHeight（不随窗口收缩），
+      // 模型渲染空间跨 reload 保持一致；窗口比画布小时用负偏移定位模型。
+      var dw = Math.max(160, winCfg.displayWidth);
+      var dh = Math.max(160, winCfg.displayHeight);
+      canvasSize = { w: dw, h: dh };
       clearStage();
       L2Dwidget.init({
         model: { jsonPath: MODEL_JSON, scale: winCfg.modelScale },
@@ -525,6 +585,7 @@
       if (next === MODEL_JSON) return true;
       MODEL_JSON = next;
       fitReported = false;
+      fitBounds = null;
       clearStage();
       var oldCanvas = document.querySelector("canvas");
       if (oldCanvas) oldCanvas.remove();
@@ -550,6 +611,14 @@
         if (typeof opts.soundEnabled === "boolean") soundCfg.enabled = opts.soundEnabled;
         if (typeof opts.soundVolume === "number") soundCfg.volume = opts.soundVolume;
       }
+      try {
+        localStorage.setItem("timepet.winCfg", JSON.stringify({
+          displayWidth: winCfg.displayWidth, displayHeight: winCfg.displayHeight,
+          hOffset: winCfg.hOffset, vOffset: winCfg.vOffset,
+          modelScale: winCfg.modelScale, modelOpacity: winCfg.modelOpacity,
+          soundEnabled: soundCfg.enabled, soundVolume: soundCfg.volume
+        }));
+      } catch (_) {}
       if (Math.abs(winCfg.modelScale - scaleBefore) > 0.001) {
         petLog("appearance scale-change -> reinit model scale=" + winCfg.modelScale);
         reinitModel();
@@ -562,6 +631,14 @@
     ready: function () { return !!document.querySelector("canvas"); },
     diag: function () { return diagState(); },
     modelBounds: function () { return modelBounds(); },
+    getAppearance: function () {
+      return {
+        displayWidth: winCfg.displayWidth, displayHeight: winCfg.displayHeight,
+        hOffset: winCfg.hOffset, vOffset: winCfg.vOffset,
+        modelScale: winCfg.modelScale, modelOpacity: winCfg.modelOpacity,
+        soundEnabled: soundCfg.enabled, soundVolume: soundCfg.volume
+      };
+    },
     fitToModel: function (bounds) {
       if (bounds && typeof bounds === "object" && typeof bounds.x === "number") {
         fitBounds = bounds;
@@ -597,6 +674,8 @@
       var glOk = false;
       try { glOk = !!(fresh.getContext("webgl") || fresh.getContext("experimental-webgl")); } catch (_) {}
       petLog("canvas-created " + c.width + "x" + c.height + " fresh-webgl=" + glOk);
+      c.addEventListener("webglcontextlost", function (e) { e.preventDefault(); petLog("WEBGL-CONTEXT-LOST"); }, false);
+      c.addEventListener("webglcontextrestored", function () { petLog("WEBGL-CONTEXT-RESTORED"); }, false);
       layoutContainer();
       clearInterval(poll);
       // 模型尺寸稳定后自动上报一次完整诊断 + 窗口贴合尺寸

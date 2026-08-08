@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -16,6 +17,7 @@ class KurisuController {
   final WebviewController controller = WebviewController();
 
   bool _initialized = false;
+  int _navCount = 0;
 
   // 当前模型（虚拟主机 model.local 映射到模型目录）
   String? _modelFile;
@@ -88,6 +90,12 @@ class KurisuController {
     });
     controller.loadingState.listen((state) {
       PetLog.i('kurisu: loadingState=$state');
+      if (state == LoadingState.navigationCompleted) {
+        _navCount++;
+        // 首次加载由 bootstrap 推送外观；location.reload() 后页面 JS 状态
+        // 会重置为默认值，这里兜底核对一次配置，不一致则重新推送。
+        if (_navCount > 1) _afterReloadCheck();
+      }
     });
     controller.webMessage.listen((msg) {
       final text = msg?.toString() ?? '';
@@ -128,6 +136,35 @@ class KurisuController {
         PetLog.i('kurisu: webMessage=$text');
       }
     });
+  }
+
+  /// 页面被 location.reload() 重载后核对外观配置（localStorage 恢复失效时的兜底）。
+  Future<void> _afterReloadCheck() async {
+    await Future.delayed(const Duration(milliseconds: 1500));
+    try {
+      final r = await controller.executeScript(
+          'window.pet && window.pet.getAppearance ? JSON.stringify(window.pet.getAppearance()) : "NO_PET"');
+      if (r is String && r.startsWith('{')) {
+        final map = jsonDecode(r) as Map<String, dynamic>;
+        final cfg = PetConfig.instance;
+        final scale = (map['modelScale'] as num?)?.toDouble() ?? -1;
+        final vOff = (map['vOffset'] as num?)?.toDouble() ?? -1;
+        final op = (map['modelOpacity'] as num?)?.toDouble() ?? -1;
+        final ok = (scale - cfg.modelScale).abs() < 0.001 &&
+            (vOff - cfg.vOffset).abs() < 0.001 &&
+            (op - cfg.modelOpacity).abs() < 0.001;
+        if (ok) {
+          PetLog.i('kurisu: appearance ok after reload scale=$scale');
+        } else {
+          PetLog.i('kurisu: appearance mismatch after reload scale=$scale vOff=$vOff op=$op, re-push');
+          await applyAppearance();
+        }
+      } else {
+        PetLog.w('kurisu: getAppearance unavailable after reload ($r)');
+      }
+    } catch (e) {
+      PetLog.e('kurisu: after-reload appearance check error: $e');
+    }
   }
 
   /// 轮询页面状态，确认 Live2D 是否成功创建 canvas。
