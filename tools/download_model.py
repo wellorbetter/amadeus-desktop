@@ -3,20 +3,19 @@
 TimePet 一键模型下载/导入 agent（下载 + 校验 + 导入 + 可选写配置）
 =================================================================
 子命令：
-  download [--url URL] [--name NAME] [--target user|exe] [--set-config]
-     默认从 Amadeus 项目（FrancescoCaracciolo/Amadeus）提供的红莉栖二创
-     Live2D 模型链接下载并导入：https://nyarchlinux.moe/Kurisu.zip
+  download --url URL [--name NAME] [--target user|exe] [--set-config]
+     --url 必填：模型 zip 下载链接由使用者自行提供，脚本不内置任何
+     第三方模型链接（与上游 Amadeus 项目做法一致）。
   list    列出已安装模型（复用 import_model）
 
 用法示例：
-  python tools/download_model.py download
-  python tools/download_model.py download --set-config
   python tools/download_model.py download --url https://example.com/model.zip --name shizuku
+  python tools/download_model.py download --url https://example.com/model.zip --set-config
 
 版权与合规（务必阅读）：
-  - 默认链接指向第三方同人二创 Live2D 模型，仅限个人本地学习研究；
+  - 模型链接指向第三方同人二创 Live2D 模型时，仅限个人本地学习研究；
     请勿商用、二次分发、重新打包发布（与仓库 models/ 不入库策略一致）。
-  - 也可用 --url 指定任何你自己拥有/获授权的模型 zip。
+  - 请使用你自己拥有或已获授权的模型 zip。
 """
 import argparse
 import os
@@ -28,8 +27,6 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import import_model as im
-
-DEFAULT_URL = "https://nyarchlinux.moe/Kurisu.zip"
 
 
 def download(url, dest_zip):
@@ -92,13 +89,13 @@ def main():
     print("=" * 60)
     print("TimePet 一键模型下载/导入 agent")
     print("=" * 60)
-    print("版权提醒：默认模型为第三方同人二创，仅限个人本地学习；")
+    print("版权提醒：第三方同人二创模型仅限个人本地学习；")
     print("请勿商用 / 二次分发 / 重新打包发布。")
     print("=" * 60)
     ap = argparse.ArgumentParser(description="TimePet 一键下载并导入模型")
     sub = ap.add_subparsers(dest="cmd")
-    p = sub.add_parser("download", help="下载并导入模型（默认红莉栖二创模型）")
-    p.add_argument("--url", default=DEFAULT_URL, help="模型 zip 下载链接")
+    p = sub.add_parser("download", help="下载并导入模型（--url 必填，不内置模型链接）")
+    p.add_argument("--url", required=True, help="模型 zip 下载链接（必填，见 README「模型导入」）")
     p.add_argument("--name", default=None, help="导入后的文件夹名（默认从模型 json 推断）")
     p.add_argument("--target", choices=["user", "exe"], default="user",
                    help="目标目录：user=%APPDATA%\\timepet\\models（默认）；exe=桌宠目录\\models\\")
