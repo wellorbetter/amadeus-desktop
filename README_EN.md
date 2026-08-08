@@ -49,7 +49,7 @@
 
 1. Download `timepet-windows.zip` from [Releases](https://github.com/wellorbetter/amadeus-desktop/releases) and unzip
 2. Set `DEEPSEEK_API_KEY=sk-...` and run `timepet.exe`
-3. Import a Live2D model as described below (the repo ships no model assets)
+3. Import a Live2D model as described below — or just run `python tools\download_model.py pick --list` and `pick <name> --set-config` for a one-command out-of-the-box model (the repo itself ships no model assets)
 4. Optional: install and run TimeTrace on this machine and the pet picks up your usage data automatically
 
 ## Model Import
@@ -73,7 +73,15 @@ python tools\download_model.py download --url <model-zip-url>          :: downlo
 python tools\download_model.py download --url <url> --set-config       :: download & set as active
 ```
 
-> Models are for personal, local study only. Do not use commercially, redistribute, or repackage. Cubism 2.1 (`.model.json`) models are supported.
+### Option C: One-command pick from the built-in model repo (out of the box)
+
+```bat
+python tools\download_model.py pick --list                            :: list built-in models (name / description)
+python tools\download_model.py pick shizuku                           :: download & import Shizuku
+python tools\download_model.py pick wed_16 --set-config               :: download, import & set active (use after restart)
+```
+
+> Built-in repo comes from the open-source free model collection [hacxy/l2d-models](https://github.com/hacxy/l2d-models) (CDN: `model.hacxy.cn`). Only Cubism 2.1 models the current engine can display are listed. Models belong to their original authors and are for personal, local study only. Do not use commercially, redistribute, or repackage. Cubism 2.1 (`.model.json`) models are supported.
 
 ## Persona / Soul
 

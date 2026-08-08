@@ -49,7 +49,7 @@
 
 1. 从 [Releases](https://github.com/wellorbetter/amadeus-desktop/releases) 下载 `timepet-windows.zip` 并解压
 2. 设置环境变量 `DEEPSEEK_API_KEY=sk-...` 后启动 `timepet.exe`
-3. 按下方「模型导入」导入一个 Live2D 模型（仓库不附带任何模型资源）
+3. 按下方「模型导入」导入一个 Live2D 模型：`python tools\download_model.py pick --list` 查看内置模型清单，`pick <名字> --set-config` 一键下载开箱即用（仓库本身不附带任何模型资源）
 4. 可选：本机安装并运行 TimeTrace，桌宠自动感知你的使用数据
 
 ## 模型导入
@@ -73,7 +73,15 @@ python tools\download_model.py download --url <模型zip链接>            :: �
 python tools\download_model.py download --url <链接> --set-config     :: 下载并设为当前模型
 ```
 
-> 模型仅限个人本地学习研究，请勿商用 / 二次分发 / 重新打包发布（与仓库 `models/` 不入库策略一致）。支持 Cubism 2.1（`.model.json`）模型。
+### 方式三：内置模型仓库一键下载（开箱即用）
+
+```bat
+python tools\download_model.py pick --list                           :: 查看内置模型清单（名称/简介）
+python tools\download_model.py pick shizuku                          :: 下载并导入小雫 Shizuku
+python tools\download_model.py pick wed_16 --set-config              :: 下载、导入并设为当前模型（重启即用）
+```
+
+> 内置仓库来自开源免费模型合集 [hacxy/l2d-models](https://github.com/hacxy/l2d-models)（直链 CDN：`model.hacxy.cn`），仅收录当前引擎可显示的 Cubism 2.1 模型。模型版权归原作者所有，仅限个人本地学习研究，请勿商用 / 二次分发 / 重新打包发布（与仓库 `models/` 不入库策略一致）。支持 Cubism 2.1（`.model.json`）模型。
 
 ## 人格 / Soul
 
