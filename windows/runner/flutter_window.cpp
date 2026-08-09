@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <windowsx.h>
 
 #include "flutter/generated_plugin_registrant.h"
 #include "desktop_multi_window/desktop_multi_window_plugin.h"
@@ -25,6 +26,31 @@ bool FlutterWindow::OnCreate() {
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
     return false;
   }
+  window_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "timepet/window",
+      &flutter::StandardMethodCodec::GetInstance());
+  window_channel_->SetMethodCallHandler(
+      [this](const auto& call, auto result) {
+        if (call.method_name() == "setHitRegion") {
+          const auto* list = std::get_if<flutter::EncodableList>(call.arguments());
+          if (list && list->size() == 4) {
+            auto number = [](const flutter::EncodableValue& value) -> int {
+              if (const auto* i = std::get_if<int32_t>(&value)) return *i;
+              if (const auto* i = std::get_if<int64_t>(&value)) return static_cast<int>(*i);
+              if (const auto* d = std::get_if<double>(&value)) return static_cast<int>(*d);
+              return 0;
+            };
+            hit_region_ = {number((*list)[0]), number((*list)[1]),
+                           number((*list)[0]) + number((*list)[2]),
+                           number((*list)[1]) + number((*list)[3])};
+            hit_region_enabled_ = hit_region_.right > hit_region_.left &&
+                                  hit_region_.bottom > hit_region_.top;
+          }
+          result->Success();
+          return;
+        }
+        result->NotImplemented();
+      });
   RegisterPlugins(flutter_controller_->engine());
   // 子窗口（设置窗口）创建时同样注册所有插件
   DesktopMultiWindowSetWindowCreatedCallback([](void *controller) {
@@ -63,6 +89,15 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   // ?? DWM ? WS_POPUP ???????????????????"?"??
   if (message == WM_NCCALCSIZE && wparam) {
     return 0;
+  }
+
+  if (message == WM_NCHITTEST && hit_region_enabled_) {
+    POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    ScreenToClient(hwnd, &point);
+    const auto dpi = static_cast<double>(GetDpiForWindow(hwnd)) / 96.0;
+    const POINT logical{static_cast<LONG>(point.x / dpi),
+                        static_cast<LONG>(point.y / dpi)};
+    if (!PtInRect(&hit_region_, logical)) return HTTRANSPARENT;
   }
 
   // Give Flutter, including plugins, an opportunity to handle window messages.

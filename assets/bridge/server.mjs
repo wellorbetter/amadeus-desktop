@@ -30,6 +30,15 @@ const DB_CANDIDATES = [
   path.join(os.homedir(), "AppData", "Roaming", "timetrace", "time.db"),
 ].filter(Boolean);
 
+// The pet is monitored like any other foreground window. Exclude only exact
+// process names so similarly named user projects are not hidden.
+const SELF_APPS = new Set([
+  "timepet", "timepet.exe", "amadeus", "amadeus.exe",
+  "amadeus-desktop", "amadeus-desktop.exe",
+]);
+function normaliseApp(value) { return String(value ?? "").trim().toLowerCase(); }
+function isSelfApp(value) { return SELF_APPS.has(normaliseApp(value)); }
+
 function openDb() {
   for (const p of DB_CANDIDATES) {
     try {
@@ -54,7 +63,7 @@ function sessionsOf(dateKey) {
   try {
     return state.db.prepare(
       "SELECT app_name, window_title, duration_secs, is_idle, started_at, ended_at FROM usage_sessions WHERE date = ? ORDER BY started_at DESC"
-    ).all(dateKey);
+    ).all(dateKey).filter((session) => !isSelfApp(session.app_name));
   } catch (_) { return []; }
 }
 
@@ -75,6 +84,7 @@ function context() {
   const h = new Date().getHours();
   return {
     ok: !!state,
+    self_filter: { enabled: true, apps: [...SELF_APPS] },
     foreground_app: lastActive?.app_name ?? "-",
     foreground_title: lastActive?.window_title ?? "",
     today: {
@@ -120,6 +130,7 @@ function dayStats(dateKey) {
     top_apps: apps.slice(0, 8).map((a) => ({ app: a.app, minutes: Math.round(a.secs / 60) })),
     peak_hours: hours.slice(0, 3).map((h) => ({ hour: h.hour, minutes: Math.round(h.secs / 60) })),
     diary: { has_entry: diaryHas, word_count: 0 },
+    self_filter: { enabled: true, apps: [...SELF_APPS] },
   };
 }
 

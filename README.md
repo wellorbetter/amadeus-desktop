@@ -48,7 +48,7 @@
 ## 快速开始
 
 1. 从 [Releases](https://github.com/wellorbetter/amadeus-desktop/releases) 下载 `timepet-windows.zip` 并解压
-2. 设置环境变量 `DEEPSEEK_API_KEY=sk-...` 后启动 `timepet.exe`
+2. 设置环境变量 `OPENAI_API_KEY=sk-...` 后启动 `timepet.exe`（OpenAI API；DeepSeek 可改用 `DEEPSEEK_API_KEY`）
 3. 按下方「模型导入」导入一个 Live2D 模型：`python tools\download_model.py pick --list` 查看内置模型清单，`pick <名字> --set-config` 一键下载开箱即用（仓库本身不附带任何模型资源）
 4. 可选：本机安装并运行 TimeTrace，桌宠自动感知你的使用数据
 
@@ -130,9 +130,10 @@ flutter build windows --release
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DEEPSEEK_API_KEY` | 无 | AI API Key（必填） |
-| `TIMEPET_MODEL` | `deepseek-chat` | 可选 `deepseek-reasoner` |
-| `TIMEPET_BASE_URL` | `https://api.deepseek.com/v1` | OpenAI 兼容 API 地址 |
+| `OPENAI_API_KEY` | 无 | OpenAI API Key |
+| `DEEPSEEK_API_KEY` | 无 | DeepSeek API Key（使用 DeepSeek 地址时） |
+| `TIMEPET_MODEL` | `gpt-5.6-luna` | 可指定 `gpt-5.6-sol`、`gpt-4.1-mini` 或 `deepseek-chat` |
+| `TIMEPET_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容 API 地址 |
 | `TIMEPET_TT_API` | `http://127.0.0.1:8788` | TimeTrace 数据桥地址 |
 | `TIMEPET_OPEN_SETTINGS` | 无 | 设为 `1` 时启动即打开设置窗口 |
 

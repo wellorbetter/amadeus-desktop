@@ -70,7 +70,9 @@ class TriggerEngine {
 
   void _enterSleep(int idleMin) {
     _sleeping = true;
-    PetLog.i('trigger: sleep enter idle=$idleMin (stop proactive, save tokens)');
+    PetLog.i(
+      'trigger: sleep enter idle=$idleMin (stop proactive, save tokens)',
+    );
     onSleepChanged?.call(true);
   }
 
@@ -146,27 +148,34 @@ class TriggerEngine {
       // 心跳日志：每 30 tick 报一次状态，便于确认引擎存活（含休眠期）
       _heartbeatTicks++;
       if (_heartbeatTicks % 30 == 0) {
-        PetLog.i('trigger: heartbeat sleep=$_sleeping hasData=$hasData '
-            'idleStreak=$_idleStreakTicks busy=$_busy');
+        PetLog.i(
+          'trigger: heartbeat sleep=$_sleeping hasData=$hasData '
+          'idleStreak=$_idleStreakTicks busy=$_busy',
+        );
       }
       if (_sleeping) return;
 
       // 预热：首 tick 只完成状态检测（空闲streak/休眠判断），不发起主动对话
       if (_warmup) {
         _warmup = false;
-        PetLog.i('trigger: warmup tick done (sleep/state only) hasData=$hasData');
+        PetLog.i(
+          'trigger: warmup tick done (sleep/state only) hasData=$hasData',
+        );
         return;
       }
 
       // 忙时自适应：未空闲且今天活跃很久 → 拉长间隔、降低上限、跳过随机搭话
-      final busy = hasData &&
+      final busy =
+          hasData &&
           cfg.adaptiveFrequency &&
           !idleGrowing &&
           tt.activeMinutes >= _busyActiveMinutes;
       if (busy != _busy) {
         _busy = busy;
-        PetLog.i('trigger: activity=${busy ? 'busy' : 'normal'} '
-            'activeMin=${tt.activeMinutes} hasData=$hasData');
+        PetLog.i(
+          'trigger: activity=${busy ? 'busy' : 'normal'} '
+          'activeMin=${tt.activeMinutes} hasData=$hasData',
+        );
       }
 
       final now = DateTime.now();
@@ -181,15 +190,22 @@ class TriggerEngine {
 
       // 频率限制：最小间隔（忙时 ×2）+ 每小时上限（忙时减半）
       final gap = Duration(
-          minutes: (cfg.minIntervalMinutes * (busy ? 2 : 1)).round());
+        minutes: (cfg.minIntervalMinutes * (busy ? 2 : 1)).round(),
+      );
       if (_lastProactiveAt != null && now.difference(_lastProactiveAt!) < gap) {
         return;
       }
       final maxPerHour = busy ? (cfg.maxPerHour / 2).ceil() : cfg.maxPerHour;
       if (_hourCount >= maxPerHour) return;
 
-      final prompt =
-          _evaluate(now, hourChanged, idleReturned, focusLong, busy, hasData);
+      final prompt = _evaluate(
+        now,
+        hourChanged,
+        idleReturned,
+        focusLong,
+        busy,
+        hasData,
+      );
       if (prompt == null) return;
 
       _lastProactiveAt = now;
@@ -204,8 +220,14 @@ class TriggerEngine {
     }
   }
 
-  String? _evaluate(DateTime now, bool hourChanged, bool idleReturned,
-      bool focusLong, bool busy, bool hasData) {
+  String? _evaluate(
+    DateTime now,
+    bool hourChanged,
+    bool idleReturned,
+    bool focusLong,
+    bool busy,
+    bool hasData,
+  ) {
     // 1) 整点
     if (cfg.triggerHourly && hourChanged && now.minute <= 2) {
       return '现在是 ${now.hour} 点，自然地和用户打个招呼或关心一句（简短，可结合观测语料，别生硬报数）。';
@@ -226,7 +248,8 @@ class TriggerEngine {
     }
 
     // 3) 长时间连续使用（依赖数据）
-    if (hasData && cfg.triggerLongSession &&
+    if (hasData &&
+        cfg.triggerLongSession &&
         tt.activeMinutes >= cfg.longSessionMinutes) {
       if (_longSessionNotifiedAt == null ||
           now.difference(_longSessionNotifiedAt!) > const Duration(hours: 2)) {
@@ -282,6 +305,5 @@ class TriggerEngine {
     return null;
   }
 
-  String _clip(String s) =>
-      s.length > 60 ? '${s.substring(0, 60)}…' : s;
+  String _clip(String s) => s.length > 60 ? '${s.substring(0, 60)}…' : s;
 }

@@ -12,6 +12,7 @@ import 'services/kurisu_controller.dart';
 import 'services/pet_config.dart';
 import 'services/pet_logger.dart';
 import 'services/pet_memory.dart';
+import 'services/pet_model.dart';
 import 'services/pet_soul.dart';
 import 'services/pet_window.dart';
 import 'services/trigger_engine.dart';
@@ -69,6 +70,8 @@ class _PetHomeState extends State<PetHome> {
   bool _sleeping = false; // 空闲休眠中（省 token：暂停主动对话/记忆审核）
   bool _greetDeferred = false; // 启动问候是否因休眠被推迟
   Timer? _bubbleTimer;
+  Timer? _bubbleUpdateTimer;
+  String _queuedBubbleText = '';
   Timer? _inputHideTimer;
   Timer? _configTimer; // 配置热生效轮询：检测 config.json 变化后应用
   double? _lastModelScale;
@@ -87,6 +90,7 @@ class _PetHomeState extends State<PetHome> {
     PetSoul.instance.load();
     final cfg = PetConfig.instance;
     _ai = AiChat(
+      apiKey: cfg.aiApiKey.isEmpty ? null : cfg.aiApiKey,
       baseUrl: cfg.aiBaseUrl,
       model: cfg.aiModel,
       temperature: cfg.aiTemperature,
@@ -94,9 +98,17 @@ class _PetHomeState extends State<PetHome> {
     );
     _aiReady = _aiActive;
     _lastModelScale = cfg.modelScale; // 记录初始缩放，供设置变更时对比是否需重新贴合窗口
-    final dpr = WidgetsBinding.instance.platformDispatcher.views.firstOrNull?.devicePixelRatio ?? 1.0;
+    final dpr =
+        WidgetsBinding
+            .instance
+            .platformDispatcher
+            .views
+            .firstOrNull
+            ?.devicePixelRatio ??
+        1.0;
     PetLog.i(
-        'app: initState aiReady=$_aiReady base=${cfg.aiBaseUrl} model=${cfg.aiModel} flutterDpr=$dpr');
+      'app: initState aiReady=$_aiReady base=${cfg.aiBaseUrl} model=${cfg.aiModel} flutterDpr=$dpr',
+    );
 
     // 交互链路：点桌宠 / 托盘「聊两句」-> 弹出聊天框
     _kurisu.onUserTap = _showInput;
@@ -112,9 +124,20 @@ class _PetHomeState extends State<PetHome> {
     // 休眠省电：空闲休眠时暂停一切 LLM 调用，唤醒后自然问候
     _triggers.onSleepChanged = _onSleepChanged;
     // 设置窗口保存配置后，通过跨窗口通道通知桌宠热生效
-    const WindowMethodChannel('pet').setMethodCallHandler((call) async {
+    const WindowMethodChannel(
+      'pet',
+      mode: ChannelMode.unidirectional,
+    ).setMethodCallHandler((call) async {
       if (call.method == 'config-changed') {
         await _onSettingsChanged();
+      } else if (call.method == 'restart') {
+        await Process.start(
+          Platform.resolvedExecutable,
+          [],
+          mode: ProcessStartMode.detached,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        await windowManager.destroy();
       }
     });
     // 配置热生效：设置窗口把改动写入 config.json 后，桌宠侧每秒轮询并应用，
@@ -133,6 +156,7 @@ class _PetHomeState extends State<PetHome> {
   @override
   void dispose() {
     _bubbleTimer?.cancel();
+    _bubbleUpdateTimer?.cancel();
     _inputHideTimer?.cancel();
     _configTimer?.cancel();
     _triggers.stop();
@@ -146,21 +170,32 @@ class _PetHomeState extends State<PetHome> {
     // bridge/server.mjs 只读 %APPDATA%\TimeTrace\time.db 提供聚合数据；不可用则拉起。
     await _ensureBridge();
     // 先拉数据（最多等 6 秒）
-    final ok = await _tt.refresh()
-        .timeout(const Duration(seconds: 6), onTimeout: () => false);
-    PetLog.i('app: tt.refresh ok=$ok hasData=${_tt.hasData} '
-        'hasHistory=${_tt.hasHistory} days=${_tt.history.length} corpus=${_tt.summary().length}');
+    final ok = await _tt.refresh().timeout(
+      const Duration(seconds: 6),
+      onTimeout: () => false,
+    );
+    PetLog.i(
+      'app: tt.refresh ok=$ok hasData=${_tt.hasData} '
+      'hasHistory=${_tt.hasHistory} days=${_tt.history.length} corpus=${_tt.summary().length}',
+    );
     if (!mounted) return;
 
     // 历史语料沉淀进记忆（mem 吸收）
     PetMemory.instance.absorbFactsFrom(_tt);
-    PetLog.i('app: facts absorbed: ${PetMemory.instance.factsSummary().length} chars');
+    PetLog.i(
+      'app: facts absorbed: ${PetMemory.instance.factsSummary().length} chars',
+    );
 
     await _kurisu.initialize();
     PetLog.i('app: kurisu.initialize done');
     if (!mounted) return;
+    if (PetModel.configuredPathMissing || PetModel.resolve() == null) {
+      unawaited(PetWindow.openSettingsWindow(modelSetup: true));
+    }
     setState(() => _webviewReady = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _logRegions('webview-ready'));
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _logRegions('webview-ready'),
+    );
 
     await _applyRuntimeConfig();
     _kurisu.applyAppearance();
@@ -191,7 +226,9 @@ class _PetHomeState extends State<PetHome> {
     if (_greetDone) return;
     _greetDone = true;
     if (!_aiActive) {
-      _say('（未配置 AI Key，先以演示模式运行。可在环境变量设置 DEEPSEEK_API_KEY 后重启）');
+      _say(
+        '（未配置 AI Key，先以演示模式运行。OpenAI 使用 OPENAI_API_KEY；DeepSeek 使用 DEEPSEEK_API_KEY）',
+      );
       return;
     }
     if (_sleeping) {
@@ -220,8 +257,13 @@ class _PetHomeState extends State<PetHome> {
   /// 按模型实际绘制范围自动调整窗口大小（仅当开启“窗口贴合模型”）。
   /// 增长式贴合：首次贴合/模型变大时调整窗口；reload 后测量值不变或更小则只重定位、
   /// 不缩放窗口，避免「先偏右再回正/这次变大」的跳动。
-  Future<void> _autoFitToModel(int x, int y, int w, int h,
-      {bool shrink = false}) async {
+  Future<void> _autoFitToModel(
+    int x,
+    int y,
+    int w,
+    int h, {
+    bool shrink = false,
+  }) async {
     if (!PetConfig.instance.autoFitWindow) return;
     if (w < 60 || h < 60) return;
     if (_fitBusy) {
@@ -234,15 +276,19 @@ class _PetHomeState extends State<PetHome> {
       const padTop = 132.0; // 顶部气泡区（加高，气泡不遮挡模型头部）
       const padBottom = 10.0; // 底部留白
       // 窗口高度固定预留底部输入区：聊天框显示/隐藏不再改变窗口尺寸（消除闪烁/遮挡）
-      final size = Size(w + padX,
-          h + padTop + padBottom + KurisuController.inputReserve);
+      final size = Size(
+        w + padX,
+        h + padTop + padBottom + KurisuController.inputReserve,
+      );
       final current = await windowManager.getSize();
       final first = !_firstFitDone;
-      final grown = !first &&
+      final grown =
+          !first &&
           (size.width > current.width + 2 || size.height > current.height + 2);
       if (first || grown || shrink) {
         PetLog.i(
-            'app: auto-fit resize first=$first grown=$grown shrink=$shrink bounds=${w}x$h at $x,$y -> ${size.width.round()}x${size.height.round()} (current=${current.width.round()}x${current.height.round()})');
+          'app: auto-fit resize first=$first grown=$grown shrink=$shrink bounds=${w}x$h at $x,$y -> ${size.width.round()}x${size.height.round()} (current=${current.width.round()}x${current.height.round()})',
+        );
         await _applyFitToModel(x, y, w, h, size, animate: !first);
         _firstFitDone = true;
       } else {
@@ -256,7 +302,8 @@ class _PetHomeState extends State<PetHome> {
           await _kurisu.layout();
         }
         PetLog.i(
-            'app: auto-fit recenter bounds=${w}x$h current=${current.width.round()}x${current.height.round()} last=${fit == null ? '-' : '${fit.w}x${fit.h}'}');
+          'app: auto-fit recenter bounds=${w}x$h current=${current.width.round()}x${current.height.round()} last=${fit == null ? '-' : '${fit.w}x${fit.h}'}',
+        );
       }
       // 首帧贴合完成后才显示模型 + 问候：避免「先大后小」的启动变形
       await _kurisu.reveal();
@@ -267,8 +314,14 @@ class _PetHomeState extends State<PetHome> {
   }
 
   /// 执行窗口贴合：按模型实际绘制范围调整窗口尺寸并贴右下角。
-  Future<void> _applyFitToModel(int x, int y, int w, int h, Size size,
-      {bool animate = false}) async {
+  Future<void> _applyFitToModel(
+    int x,
+    int y,
+    int w,
+    int h,
+    Size size, {
+    bool animate = false,
+  }) async {
     // 首帧用 animate:false 直接吸附到贴合尺寸，避免启动时窗口缩放变形的过程
     await windowManager.setSize(size, animate: animate);
     await PetWindow.placeBottomRight(size: size);
@@ -295,11 +348,20 @@ class _PetHomeState extends State<PetHome> {
     try {
       final size = await windowManager.getSize();
       final pos = await windowManager.getPosition();
-      final dpr = WidgetsBinding.instance.platformDispatcher.views.firstOrNull?.devicePixelRatio ?? 1.0;
-      PetLog.i('region[$tag] window=pos$pos size=$size dpr=$dpr '
-          'webview=${_rectOf(_webviewKey)} '
-          'bubble=${_rectOf(_bubbleKey)} visible=$_bubbleVisible '
-          'input=${_rectOf(_inputKey)} visible=$_inputVisible');
+      final dpr =
+          WidgetsBinding
+              .instance
+              .platformDispatcher
+              .views
+              .firstOrNull
+              ?.devicePixelRatio ??
+          1.0;
+      PetLog.i(
+        'region[$tag] window=pos$pos size=$size dpr=$dpr '
+        'webview=${_rectOf(_webviewKey)} '
+        'bubble=${_rectOf(_bubbleKey)} visible=$_bubbleVisible '
+        'input=${_rectOf(_inputKey)} visible=$_inputVisible',
+      );
     } catch (_) {}
   }
 
@@ -307,7 +369,8 @@ class _PetHomeState extends State<PetHome> {
     final cfg = PetConfig.instance;
     await PetWindow.applyRuntime(cfg);
     PetLog.i(
-        'app: runtime config applied top=${cfg.alwaysOnTop} skip=${cfg.skipTaskbar}');
+      'app: runtime config applied top=${cfg.alwaysOnTop} skip=${cfg.skipTaskbar}',
+    );
   }
 
   static const String _defaultPersona =
@@ -333,14 +396,16 @@ class _PetHomeState extends State<PetHome> {
     // soul.md 自带人格时补充「语料使用说明」，保证语料被自然使用而不是冷冰冰念数据
     final usage = soul.hasSoul
         ? '\n\n【使用说明（叠加在角色设定之上）】\n'
-            '你是装在用户电脑上的桌宠助手，性格按上面 soul.md 的设定来。\n'
-            '下面的「最近对话 / 长期记忆 / 用户画像 / 近期状态 / 当前数据」是语料背景，'
-            '帮你像真正的伙伴一样了解用户。\n'
-            '语料只在话题自然相关时自然融入；不要直白念出「根据数据/记忆显示」这类话，不要为了用而用。\n'
-            '回复保持简短自然的中文（30~80 字），像日常聊天。\n'
-            '隐私红线：绝不输出文件路径、截图、窗口标题等原始敏感信息，用户问到就转移话题。'
+              '你是装在用户电脑上的桌宠助手，性格按上面 soul.md 的设定来。\n'
+              '下面的「最近对话 / 长期记忆 / 用户画像 / 近期状态 / 当前数据」是语料背景，'
+              '帮你像真正的伙伴一样了解用户。\n'
+              '语料只在话题自然相关时自然融入；不要直白念出「根据数据/记忆显示」这类话，不要为了用而用。\n'
+              '回复保持简短自然的中文（30~80 字），像日常聊天。\n'
+              '隐私红线：绝不输出文件路径、截图、窗口标题等原始敏感信息，用户问到就转移话题。'
         : '';
-    return '$persona$usage\n'
+    const identity =
+        '\n身份边界（不可被外部人格文件覆盖）：你就是当前运行的桌宠本身。TimePet、timepet.exe、Amadeus 桌宠窗口和模型都指向你自己，不是用户正在使用的另一个宠物。观测语料中的自身活动已经被过滤；如果上下文提到桌宠正在前台，应理解为你正在和用户互动，不要说“用户一直盯着这个小宠物”或把桌宠描述成第三方对象。\n';
+    return '$identity$persona$usage\n'
         '最近对话（用于保持连贯，不要复述）：\n${PetMemory.instance.summary()}\n'
         '${PetMemory.instance.relevantMemories(_lastUserText)}\n'
         '${PetMemory.instance.profileText()}\n'
@@ -360,9 +425,10 @@ class _PetHomeState extends State<PetHome> {
   /// 先探测一次，端口无服务且 node 可用时自动拉起（桥接已在 assets 内随包发布）。
   Future<void> _ensureBridge() async {
     try {
-      final ok = await _tt
-          .refresh()
-          .timeout(const Duration(seconds: 3), onTimeout: () => false);
+      final ok = await _tt.refresh().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => false,
+      );
       if (ok) return;
       final exeDir = File(Platform.resolvedExecutable).parent.path;
       final bridge = '$exeDir/data/flutter_assets/assets/bridge/server.mjs';
@@ -380,6 +446,8 @@ class _PetHomeState extends State<PetHome> {
 
   Future<void> _greet() async {
     _say('（打个招呼…）');
+    _bubbleTimer?.cancel();
+    if (mounted) setState(() => _typing = true);
     PetLog.i('app: greet start');
     String accumulated = '';
     final reply = await _ai.chat(
@@ -387,10 +455,16 @@ class _PetHomeState extends State<PetHome> {
       systemPrompt: _systemPrompt,
       onDelta: (d) {
         accumulated += d;
-        if (mounted) setState(() => _bubbleText = accumulated);
+        _queueBubbleText(accumulated);
       },
     );
+    final complete = _ai.lastRequestCompleted;
     PetLog.i('app: greet reply len=${reply.length}');
+    if (!complete) {
+      final partial = reply.isNotEmpty ? reply : accumulated;
+      _say(partial.isEmpty ? '回复中断了。' : '$partial\n\n（回复中断，未保存为完整对话）');
+      return;
+    }
     final text = reply.isNotEmpty
         ? reply
         : (accumulated.isNotEmpty ? accumulated : '嗨，我在呢。今天过得怎么样？');
@@ -402,6 +476,8 @@ class _PetHomeState extends State<PetHome> {
   Future<void> _proactive(String prompt) async {
     if (_typing || !_aiActive) return;
     _say('（红莉栖想找你说话…）');
+    _bubbleTimer?.cancel();
+    if (mounted) setState(() => _typing = true);
     PetLog.i('app: proactive prompt=$prompt');
     String accumulated = '';
     final reply = await _ai.chat(
@@ -409,10 +485,16 @@ class _PetHomeState extends State<PetHome> {
       systemPrompt: _systemPrompt,
       onDelta: (d) {
         accumulated += d;
-        if (mounted) setState(() => _bubbleText = accumulated);
+        _queueBubbleText(accumulated);
       },
     );
+    final complete = _ai.lastRequestCompleted;
     PetLog.i('app: proactive reply len=${reply.length}');
+    if (!complete) {
+      final partial = reply.isNotEmpty ? reply : accumulated;
+      _say(partial.isEmpty ? '回复中断了。' : '$partial\n\n（回复中断，未保存为完整对话）');
+      return;
+    }
     final text = reply.isNotEmpty
         ? reply
         : (accumulated.isNotEmpty ? accumulated : '喂，助手君，在忙吗？');
@@ -422,6 +504,10 @@ class _PetHomeState extends State<PetHome> {
   }
 
   Future<void> _ask(String text) async {
+    if (_typing) {
+      PetLog.i('app: ask ignored while another reply is streaming');
+      return;
+    }
     PetLog.i('app: ask start len=${text.length}');
     _lastUserText = text;
     PetMemory.instance.record('user', text);
@@ -439,27 +525,34 @@ class _PetHomeState extends State<PetHome> {
     }
 
     String accumulated = '';
-    await _ai.chat(
+    final reply = await _ai.chat(
       text,
       systemPrompt: _systemPrompt,
       onDelta: (d) {
         accumulated += d;
-        if (mounted) setState(() => _bubbleText = accumulated);
+        _queueBubbleText(accumulated);
       },
     );
+    final complete = _ai.lastRequestCompleted;
     if (!mounted) return;
     setState(() => _typing = false);
-    PetLog.i('app: ask reply len=${accumulated.length}');
-    if (accumulated.isEmpty) {
+    final finalText = reply.isNotEmpty ? reply : accumulated;
+    PetLog.i('app: ask reply len=${finalText.length} complete=$complete');
+    if (finalText.isEmpty) {
       _say('（AI 没有回复，可能是网络或 Key 问题）');
       return;
     }
-    PetMemory.instance.record('assistant', accumulated);
+    if (!complete) {
+      _say('$finalText\n\n（回复中断，未保存为完整对话）');
+      return;
+    }
+    PetMemory.instance.record('assistant', finalText);
     _scheduleHide();
     _kurisu.motion('tap_body');
     // 异步记忆审核：提取值得长期记住的信息（不阻塞回复）
     unawaited(_auditMemory(text));
   }
+
   void _showPetMenu(int x, int y) {
     if (!mounted) return;
     _triggers.wake();
@@ -482,16 +575,18 @@ class _PetHomeState extends State<PetHome> {
     final maxTop = (size.height - menuH).clamp(0.0, size.height);
     final scheme = Theme.of(context).colorScheme;
     Widget item(String label, VoidCallback onTap) => InkWell(
-          onTap: onTap,
-          child: Container(
-            width: menuW,
-            height: itemH,
-            alignment: Alignment.centerLeft,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Text(label,
-                style: TextStyle(fontSize: 13, color: scheme.onSurface)),
-          ),
-        );
+      onTap: onTap,
+      child: Container(
+        width: menuW,
+        height: itemH,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Text(
+          label,
+          style: TextStyle(fontSize: 13, color: scheme.onSurface),
+        ),
+      ),
+    );
     return Stack(
       children: [
         // 点击菜单外区域关闭
@@ -550,9 +645,10 @@ class _PetHomeState extends State<PetHome> {
     }
     _lastAuditAt = now;
     PetLog.i('mem: audit start');
-    final reply = await _ai.rawChat(
+    final reply = await _ai.auxiliaryClient().rawChat(
       system: '你是一个严格的记忆提取器，只提取稳定且长期有用的用户信息。',
-      user: '从下面的用户消息中，提取值得长期记住的稳定信息（偏好/习惯/目标/个人事实/重要事件/人际关系）。\n'
+      user:
+          '从下面的用户消息中，提取值得长期记住的稳定信息（偏好/习惯/目标/个人事实/重要事件/人际关系）。\n'
           '规则：\n'
           '- 只提取稳定、重要、未来可复用的信息；忽略一次性闲聊、问候、当下情绪、对 AI 的评论。\n'
           '- 不要提取 TimeTrace 统计能看到的内容（应用名、使用时长等）。\n'
@@ -588,16 +684,27 @@ class _PetHomeState extends State<PetHome> {
     _triggers.wake(); // 点桌宠/托盘聊两句 = 用户在场，立即唤醒
     PetLog.i('app: show input');
     setState(() => _inputVisible = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _logRegions('input-show'));
+    unawaited(_kurisu.setInputHitRegion(true));
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _logRegions('input-show'),
+    );
     _scheduleInputHide();
   }
 
   /// 设置窗口保存配置后（跨窗口通道）触发的热生效。
   Future<void> _onSettingsChanged() async {
     PetLog.i('app: settings changed (remote), applying side effects');
-    PetConfig.instance.reloadIfChanged(); // reload config from disk (settings-window path)
+    PetConfig.instance
+        .reloadIfChanged(); // reload config from disk (settings-window path)
     final cfg = PetConfig.instance;
     PetSoul.instance.load(); // 人格插件热重载
+    _ai.updateConfig(
+      apiKey: cfg.aiApiKey.isEmpty ? null : cfg.aiApiKey,
+      baseUrl: cfg.aiBaseUrl,
+      model: cfg.aiModel,
+      temperature: cfg.aiTemperature,
+      maxTokens: cfg.aiMaxTokens,
+    );
     final modelBefore = _kurisu.modelFile;
     await _kurisu.setModel(); // 模型插件热切换（路径变化时）
     final modelChanged = _kurisu.modelFile != modelBefore;
@@ -621,6 +728,7 @@ class _PetHomeState extends State<PetHome> {
       if (mounted && !_typing) {
         PetLog.i('app: input auto-hide');
         setState(() => _inputVisible = false);
+        unawaited(_kurisu.setInputHitRegion(false));
       }
     });
   }
@@ -633,8 +741,22 @@ class _PetHomeState extends State<PetHome> {
       _bubbleVisible = true;
       _typing = false;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _logRegions('bubble-show'));
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _logRegions('bubble-show'),
+    );
     _scheduleHide();
+  }
+
+  void _queueBubbleText(String text) {
+    _queuedBubbleText = text;
+    if (_bubbleUpdateTimer != null) return;
+    _bubbleUpdateTimer = Timer(const Duration(milliseconds: 33), () {
+      _bubbleUpdateTimer = null;
+      if (!mounted) return;
+      if (_bubbleText != _queuedBubbleText) {
+        setState(() => _bubbleText = _queuedBubbleText);
+      }
+    });
   }
 
   void _scheduleHide() {
@@ -683,7 +805,8 @@ class _PetHomeState extends State<PetHome> {
               child: PetInputBar(
                 key: _inputKey,
                 onSend: _ask,
-                enabled: _aiActive,
+                // Key 缺失时也允许输入，发送后再给出凭据提示。
+                enabled: true,
                 autofocus: true,
               ),
             ),

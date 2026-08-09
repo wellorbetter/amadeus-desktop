@@ -71,7 +71,11 @@ class _PetInputBarState extends State<PetInputBar> {
           const SizedBox(width: 8),
           IconButton(
             onPressed: (widget.enabled && !_busy) ? _send : null,
-            icon: const Icon(Icons.send_rounded, size: 18, color: Color(0xFF7C8CFF)),
+            icon: const Icon(
+              Icons.send_rounded,
+              size: 18,
+              color: Color(0xFF7C8CFF),
+            ),
             tooltip: '发送',
           ),
         ],

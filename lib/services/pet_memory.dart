@@ -19,8 +19,9 @@ class PetMemory {
 
   /// 记忆提取信号：命中才触发 LLM 审核（省成本）。
   static final RegExp _signal = RegExp(
-      r'我(?:喜欢|讨厌|爱|想|希望|打算|计划|习惯|记得|忘|是|在|有|要|会|最近|每天|经常|偶尔|从来)'
-      r'|我的|我对象|我朋友|我家人|别忘|记住|以后|目标|想买|想去|想学|在学');
+    r'我(?:喜欢|讨厌|爱|想|希望|打算|计划|习惯|记得|忘|是|在|有|要|会|最近|每天|经常|偶尔|从来)'
+    r'|我的|我对象|我朋友|我家人|别忘|记住|以后|目标|想买|想去|想学|在学',
+  );
 
   void load() => PetDb.instance.init();
 
@@ -39,7 +40,9 @@ class PetMemory {
     for (final r in rows) {
       final who = r['role'] == 'user' ? '用户' : '红莉栖';
       var text = (r['content'] as String? ?? '').replaceAll('\n', ' ');
-      if (text.length > 120) text = '${text.substring(0, 120)}…'; // 单条消息截断，控制 token
+      if (text.length > 120) {
+        text = '${text.substring(0, 120)}…'; // 单条消息截断，控制 token
+      }
       sb.writeln('$who：$text');
     }
     return sb.toString();
@@ -59,12 +62,16 @@ class PetMemory {
     if (days.isEmpty) return '';
     final sb = StringBuffer('近期状态：\n');
     for (final d in days) {
-      final apps =
-          d.topApps.take(4).map((a) => '${a.name} ${a.minutes} 分钟').join('、');
-      sb.writeln('- ${d.readableDate}：活跃 ${d.activeText}'
-          '${d.idleMin > 0 ? '，空闲 ${d.idleMin} 分钟' : ''}'
-          '，主要使用 ${apps.isEmpty ? '无' : apps}'
-          '${d.diaryHas ? '，写了日记' : ''}');
+      final apps = d.topApps
+          .take(4)
+          .map((a) => '${a.name} ${a.minutes} 分钟')
+          .join('、');
+      sb.writeln(
+        '- ${d.readableDate}：活跃 ${d.activeText}'
+        '${d.idleMin > 0 ? '，空闲 ${d.idleMin} 分钟' : ''}'
+        '，主要使用 ${apps.isEmpty ? '无' : apps}'
+        '${d.diaryHas ? '，写了日记' : ''}',
+      );
     }
     return sb.toString().trim();
   }
@@ -79,13 +86,29 @@ class PetMemory {
     var stored = 0;
     for (final it in items) {
       final content = it['content']?.toString().trim() ?? '';
-      if (content.isEmpty) continue;
-      final importance = (it['importance'] as num?)?.toInt() ?? 1;
+      if (content.isEmpty || content.length > 500) continue;
+      final rawImportance = it['importance'];
+      final importance = rawImportance is num
+          ? rawImportance.toInt().clamp(1, 5).toInt()
+          : 1;
       if (importance < 2) continue;
-      final cat = it['category']?.toString() ?? 'fact';
+      const categories = {
+        'preference',
+        'habit',
+        'goal',
+        'fact',
+        'event',
+        'relationship',
+      };
+      final candidate = it['category']?.toString();
+      final cat = categories.contains(candidate) ? candidate! : 'fact';
       if (PetDb.instance.memoryExists(content)) continue;
-      PetDb.instance.addMemory(content,
-          category: cat, importance: importance, source: 'audit');
+      PetDb.instance.addMemory(
+        content,
+        category: cat,
+        importance: importance,
+        source: 'audit',
+      );
       stored++;
     }
     if (stored > 0) {
@@ -110,6 +133,9 @@ class PetMemory {
       PetDb.instance.topMemory(excludeId: excludeId);
 
   int memoryCount() => PetDb.instance.memoryCount();
+
+  List<Map<String, Object?>> recentMemoryRows({int limit = 8}) =>
+      PetDb.instance.recentMemoryRows(limit: limit);
 
   // ---- 用户画像 ----
 
@@ -143,7 +169,8 @@ class PetMemory {
     if (p['has'] != true) return '';
     final sb = StringBuffer('用户画像（规律参考，自然融入，不要直白念出）：\n');
     sb.writeln(
-        '- 近 ${p['days']} 天日均活跃约 ${((p['avgActiveMin'] as int) / 60).toStringAsFixed(1)} 小时');
+      '- 近 ${p['days']} 天日均活跃约 ${((p['avgActiveMin'] as int) / 60).toStringAsFixed(1)} 小时',
+    );
     if ((p['lateNightRatio'] as double) > 0.3) {
       sb.writeln('- 深夜活跃天数偏多');
     }

@@ -35,7 +35,7 @@ class PetWindow {
       backgroundColor: Colors.transparent,
       titleBarStyle: TitleBarStyle.hidden,
       windowButtonVisibility: false,
-      skipTaskbar: false,
+      skipTaskbar: true,
     );
 
     windowManager.waitUntilReadyToShow(opts, () async {
@@ -58,25 +58,34 @@ class PetWindow {
     await windowManager.setMinimizable(false);
     await windowManager.setMaximizable(false);
     try {
-      await windowManager.setSkipTaskbar(PetConfig.instance.skipTaskbar);
+      // The pet is a transparent utility window; only the settings window
+      // should be discoverable from the taskbar.
+      await windowManager.setSkipTaskbar(true);
     } catch (_) {}
 
     await setupTray();
   }
 
   /// 打开独立设置窗口（不存在则创建，已存在则前置显示）。
-  static Future<void> openSettingsWindow() async {
+  static Future<void> openSettingsWindow({bool modelSetup = false}) async {
     try {
       final windows = await WindowController.getAll();
       for (final w in windows) {
-        if (w.arguments.contains('settings')) {
+        final isModelSetup = w.arguments.contains('model-setup');
+        if (w.arguments.contains('settings') && isModelSetup == modelSetup) {
           PetLog.i('settings: reuse window id=${w.windowId}');
           await w.show();
+          try {
+            await w.invokeMethod('focus');
+          } catch (_) {}
           return;
         }
       }
       final c = await WindowController.create(
-        const WindowConfiguration(arguments: 'settings', hiddenAtLaunch: true),
+        WindowConfiguration(
+          arguments: modelSetup ? 'settings model-setup' : 'settings',
+          hiddenAtLaunch: true,
+        ),
       );
       PetLog.i('settings: created window id=${c.windowId}');
       // 子窗口引擎启动后由设置页负责定位/显示；这里延迟兜底显示一次。
@@ -94,7 +103,7 @@ class PetWindow {
   static Future<void> applyRuntime(PetConfig cfg) async {
     await windowManager.setAlwaysOnTop(cfg.alwaysOnTop);
     try {
-      await windowManager.setSkipTaskbar(cfg.skipTaskbar);
+      await windowManager.setSkipTaskbar(true);
     } catch (_) {}
   }
 
@@ -112,7 +121,9 @@ class PetWindow {
         pos.dx + area.width - actual.width - 24,
         pos.dy + area.height - actual.height - 24,
       );
-      PetLog.i('window: placeBottomRight size=$actual area=$area target=$target');
+      PetLog.i(
+        'window: placeBottomRight size=$actual area=$area target=$target',
+      );
       await windowManager.setPosition(target);
     } catch (_) {
       await windowManager.center();
@@ -123,13 +134,17 @@ class PetWindow {
     final iconPath = await _extractTrayIcon();
     await trayManager.setIcon(iconPath);
     await trayManager.setToolTip('TimeTrace 助手 · 牧濑红莉栖');
-    await trayManager.setContextMenu(Menu(items: [
-      MenuItem(key: 'show', label: '显示桌宠'),
-      MenuItem(key: 'chat', label: '聊两句'),
-      MenuItem(key: 'settings', label: '设置'),
-      MenuItem.separator(),
-      MenuItem(key: 'quit', label: '退出'),
-    ]));
+    await trayManager.setContextMenu(
+      Menu(
+        items: [
+          MenuItem(key: 'show', label: '显示桌宠'),
+          MenuItem(key: 'chat', label: '聊两句'),
+          MenuItem(key: 'settings', label: '设置'),
+          MenuItem.separator(),
+          MenuItem(key: 'quit', label: '退出'),
+        ],
+      ),
+    );
     trayManager.addListener(_trayListener);
   }
 

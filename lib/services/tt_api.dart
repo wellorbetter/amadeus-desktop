@@ -15,24 +15,31 @@ class DayInfo {
   factory DayInfo.fromJson(Map<String, dynamic> json) {
     final apps = (json['top_apps'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
-        .map((e) => AppUsage(
-              name: e['app']?.toString() ?? '?',
-              minutes: (e['minutes'] as num?)?.toInt() ?? 0,
-            ))
-        .where((a) => a.minutes > 0)
+        .map(
+          (e) => AppUsage(
+            name: e['app']?.toString() ?? '?',
+            minutes: e['minutes'] is num ? (e['minutes'] as num).toInt() : 0,
+          ),
+        )
+        .where((a) => a.minutes > 0 && !TtApi.isSelfApp(a.name))
         .toList();
     final peak = (json['peak_hours'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
-        .map((e) => HourUsage(
-              hour: (e['hour'] as num?)?.toInt() ?? 0,
-              minutes: (e['minutes'] as num?)?.toInt() ?? 0,
-            ))
+        .where((e) => e['hour'] is num)
+        .map(
+          (e) => HourUsage(
+            hour: e['hour'] is num ? (e['hour'] as num).toInt() : 0,
+            minutes: e['minutes'] is num ? (e['minutes'] as num).toInt() : 0,
+          ),
+        )
         .toList();
     final diary = json['diary'];
     return DayInfo(
       date: json['date']?.toString() ?? '',
-      activeMin: (json['active_min'] as num?)?.toInt() ?? 0,
-      idleMin: (json['idle_min'] as num?)?.toInt() ?? 0,
+      activeMin: json['active_min'] is num
+          ? (json['active_min'] as num).toInt()
+          : 0,
+      idleMin: json['idle_min'] is num ? (json['idle_min'] as num).toInt() : 0,
       topApps: apps,
       peakHours: peak,
       diaryHas: diary is Map<String, dynamic>
@@ -52,7 +59,10 @@ class DayInfo {
   String get readableDate {
     final parts = date.split('-');
     if (parts.length != 3) return date;
-    return '${int.parse(parts[1])}月${int.parse(parts[2])}日';
+    final month = int.tryParse(parts[1]);
+    final day = int.tryParse(parts[2]);
+    if (month == null || day == null) return date;
+    return '$month月$day日';
   }
 
   String get activeText {
@@ -84,8 +94,9 @@ class HourUsage {
 /// TimeTrace 聚合数据（本地 8788 API：今日 context + 历史日聚合）。
 class TtApi {
   TtApi({String? base})
-      : base = base ??
-            (Platform.environment['TIMEPET_TT_API'] ?? 'http://127.0.0.1:8788');
+    : base =
+          base ??
+          (Platform.environment['TIMEPET_TT_API'] ?? 'http://127.0.0.1:8788');
 
   final String base;
   String _foreground = '-';
@@ -111,16 +122,26 @@ class TtApi {
   int get switches => _switches;
   String get foregroundApp => _foreground;
 
+  static bool isSelfApp(String value) {
+    final name = value.trim().toLowerCase();
+    return const {
+      'timepet', 'timepet.exe', 'amadeus', 'amadeus.exe',
+      'amadeus-desktop', 'amadeus-desktop.exe',
+    }.contains(name);
+  }
+
   Future<bool> refresh() async {
     var ok = false;
     try {
       final ctx = await _getJson('/api/context');
       if (ctx != null) {
-        _foreground = (ctx['foreground_app'] as String?) ?? '-';
+        final foreground = (ctx['foreground_app'] as String?) ?? '-';
+        _foreground = isSelfApp(foreground) ? '-' : foreground;
         _activeMin = (ctx['today']?['active_min'] as num?)?.toInt() ?? 0;
         _idleMin = (ctx['today']?['idle_min'] as num?)?.toInt() ?? 0;
         _switches = (ctx['today']?['switches'] as num?)?.toInt() ?? 0;
-        _topApp = (ctx['today']?['top_app'] as String?) ?? '-';
+        final top = (ctx['today']?['top_app'] as String?) ?? '-';
+        _topApp = isSelfApp(top) ? '-' : top;
         _lastActive = (ctx['last_active_at'] as String?) ?? '-';
         _nowHour = (ctx['now_hour'] as num?)?.toString() ?? '';
         ok = true;
@@ -130,7 +151,8 @@ class TtApi {
     }
 
     // 历史日聚合（昨天、前天等）：5 分钟缓存，避免每 60 秒拉一次 7 天数据
-    final historyDue = _lastHistoryAt == null ||
+    final historyDue =
+        _lastHistoryAt == null ||
         DateTime.now().difference(_lastHistoryAt!) >= _historyCache;
     if (historyDue) {
       try {
@@ -138,10 +160,12 @@ class TtApi {
         if (hist != null && hist['days'] is List) {
           _history
             ..clear()
-            ..addAll((hist['days'] as List)
-                .whereType<Map<String, dynamic>>()
-                .map(DayInfo.fromJson)
-                .where((d) => d.date.isNotEmpty));
+            ..addAll(
+              (hist['days'] as List)
+                  .whereType<Map<String, dynamic>>()
+                  .map(DayInfo.fromJson)
+                  .where((d) => d.date.isNotEmpty),
+            );
           _lastHistoryAt = DateTime.now();
           ok = true;
         }
@@ -161,11 +185,14 @@ class TtApi {
   String historySummary() {
     if (_history.isEmpty) return '';
     final sb = StringBuffer();
-    for (final d in _history.take(3)) { // 语料只带近 3 天，控制 system prompt 体积（省 token）
-      sb.writeln('${d.readableDate}（${d.date}）：活跃 ${d.activeText}'
-          '${d.idleMin > 0 ? '，空闲 ${d.idleMin} 分钟' : ''}'
-          '；主要使用：${d.topAppsText}'
-          '${d.diaryHas ? '；写了日记' : ''}');
+    for (final d in _history.take(3)) {
+      // 语料只带近 3 天，控制 system prompt 体积（省 token）
+      sb.writeln(
+        '${d.readableDate}（${d.date}）：活跃 ${d.activeText}'
+        '${d.idleMin > 0 ? '，空闲 ${d.idleMin} 分钟' : ''}'
+        '；主要使用：${d.topAppsText}'
+        '${d.diaryHas ? '；写了日记' : ''}',
+      );
     }
     return sb.toString().trim();
   }

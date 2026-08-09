@@ -11,6 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_acrylic: ^1.1.4
+  file_selector: ^1.1.0
   screen_retriever: ^0.2.2
   sqlite3: ^3.5.1
   sqlite3_flutter_libs: ^0.6.0+eol

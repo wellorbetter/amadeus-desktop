@@ -6,9 +6,11 @@ import 'package:flutter/foundation.dart';
 /// 动态配置：%APPDATA%/timepet/config.json
 /// 设置面板修改即时保存并热生效，无需重启；也支持外部编辑后 60 秒自动热加载。
 class PetConfig {
-  PetConfig._();
+  PetConfig({String? pathOverride}) : _pathOverride = pathOverride;
 
-  static final PetConfig instance = PetConfig._();
+  static final PetConfig instance = PetConfig();
+
+  final String? _pathOverride;
 
   File? _file;
   DateTime? _lastLoad;
@@ -28,7 +30,9 @@ class PetConfig {
   double bubbleFontSize = 13.0; // 气泡字号
   int bubbleAutoHideSeconds = 8; // 气泡自动隐藏秒数
   bool darkMode = true; // 设置窗口深浅主题（true=深色）
-  String modelPath = ''; // Live2D 模型 json 路径（留空自动扫描 exe 目录/models 与 %APPDATA%/timepet/models）
+  double settingsOpacity = 0.96; // 设置窗口整体透明度
+  String modelPath =
+      ''; // Live2D 模型 json 路径（留空自动扫描 exe 目录/models 与 %APPDATA%/timepet/models）
 
   // ---- 主动对话 ----
   bool proactiveEnabled = true;
@@ -55,9 +59,13 @@ class PetConfig {
 
   // ---- AI ----
   bool aiEnabled = true;
-  String aiBaseUrl = 'https://api.deepseek.com/v1';
-  String aiModel = 'deepseek-chat';
-  String soulFile = ''; // 人格插件 soul.md 路径（留空自动检测 %APPDATA%/timepet/soul.md 或 exe 目录/soul.md）
+  String aiAuthMode = 'openai_api_key';
+  String aiApiKey = '';
+  String aiBaseUrl = 'https://api.openai.com/v1';
+  String aiModel = 'gpt-5.6-luna';
+  String soulText = '';
+  String soulFile =
+      ''; // 人格插件 soul.md 路径（留空自动检测 %APPDATA%/timepet/soul.md 或 exe 目录/soul.md）
   double aiTemperature = 0.8;
   int aiMaxTokens = 800; // AI 单次回复最大 token 数（防长回复截断）
 
@@ -72,73 +80,71 @@ class PetConfig {
   bool autoFitWindow = true; // 启动时按模型比例自动调整窗口大小
 
   String get path {
-    final appData = Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
+    final override = _pathOverride;
+    if (override != null) return override;
+    final appData =
+        Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
     return '$appData/timepet/config.json';
   }
 
   File get file => _file ??= File(path);
 
   Map<String, dynamic> _defaults() => {
-        '_说明':
-            'TimeTrace 桌宠动态配置。设置面板修改即时生效；外部编辑后 60 秒内自动热加载（无需重启）。proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠（空闲时停止主动对话/记忆审核，省 token）；appearance 为模型/气泡外观；ai 为对话模型；log 为日志；window 为窗口行为。',
-        'appearance': {
-          'modelScale': 1.0,
-          'displayWidth': 440,
-          'displayHeight': 640,
-          'hOffset': 0,
-          'vOffset': 10,
-          'modelOpacity': 1.0,
-          'soundEnabled': false,
-          'soundVolume': 0.8,
-          'bubbleFontSize': 13.0,
-          'bubbleAutoHideSeconds': 8,
-          'darkMode': true,
-          'modelPath': '',
-        },
-        'proactive': {
-          'enabled': true,
-          'minIntervalMinutes': 20.0,
-          'maxPerHour': 2,
-          'longSessionMinutes': 120,
-          'randomNudgeChance': 0.25,
-          'triggers': {
-            'hourly': true,
-            'lateNight': true,
-            'longSession': true,
-            'appSwitchSpike': true,
-            'randomNudge': true,
-            'idleReturn': true,
-            'focusReminder': true,
-            'memoryNudge': true,
-          },
-        },
-        'chat': {
-          'autoHideSeconds': 20,
-        },
-        'sleep': {
-          'enabled': true,
-          'idleMinutes': 15,
-          'adaptiveFrequency': true,
-        },
-        'ai': {
-          'enabled': true,
-          'baseUrl': 'https://api.deepseek.com/v1',
-          'model': 'deepseek-chat',
-          'temperature': 0.8,
-          'maxTokens': 800,
-          'soulFile': '',
-        },
-        'log': {
-          'enabled': true,
-          'level': 'INFO',
-        },
-        'window': {
-          'alwaysOnTop': true,
-          'skipTaskbar': false,
-          'startVisible': true,
-          'autoFitWindow': true,
-        },
-      };
+    '_说明':
+        'TimeTrace 桌宠动态配置。设置面板修改即时生效；外部编辑后 60 秒内自动热加载（无需重启）。proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠（空闲时停止主动对话/记忆审核，省 token）；appearance 为模型/气泡外观；ai 为对话模型；log 为日志；window 为窗口行为。',
+    'appearance': {
+      'modelScale': 1.0,
+      'displayWidth': 440,
+      'displayHeight': 640,
+      'hOffset': 0,
+      'vOffset': 10,
+      'modelOpacity': 1.0,
+      'soundEnabled': false,
+      'soundVolume': 0.8,
+      'bubbleFontSize': 13.0,
+      'bubbleAutoHideSeconds': 8,
+      'darkMode': true,
+      'settingsOpacity': 0.96,
+      'modelPath': '',
+    },
+    'proactive': {
+      'enabled': true,
+      'minIntervalMinutes': 20.0,
+      'maxPerHour': 2,
+      'longSessionMinutes': 120,
+      'randomNudgeChance': 0.25,
+      'triggers': {
+        'hourly': true,
+        'lateNight': true,
+        'longSession': true,
+        'appSwitchSpike': true,
+        'randomNudge': true,
+        'idleReturn': true,
+        'focusReminder': true,
+        'memoryNudge': true,
+      },
+    },
+    'chat': {'autoHideSeconds': 20},
+    'sleep': {'enabled': true, 'idleMinutes': 15, 'adaptiveFrequency': true},
+    'ai': {
+      'enabled': true,
+      'authMode': 'openai_api_key',
+      'apiKey': '',
+      'baseUrl': 'https://api.openai.com/v1',
+      'model': 'gpt-5.6-luna',
+      'temperature': 0.8,
+      'maxTokens': 800,
+      'soulFile': '',
+      'soulText': '',
+    },
+    'log': {'enabled': true, 'level': 'INFO'},
+    'window': {
+      'alwaysOnTop': true,
+      'skipTaskbar': false,
+      'startVisible': true,
+      'autoFitWindow': true,
+    },
+  };
 
   /// 读取配置（文件不存在则写入默认值）。
   void load() {
@@ -147,9 +153,11 @@ class PetConfig {
       if (!f.existsSync()) {
         f.parent.createSync(recursive: true);
         f.writeAsStringSync(
-            const JsonEncoder.withIndent('  ').convert(_defaults()));
+          const JsonEncoder.withIndent('  ').convert(_defaults()),
+        );
       }
       final json = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      _apply(_defaults());
       _apply(json);
       _lastLoad = f.statSync().modified;
       revision.value++;
@@ -159,6 +167,17 @@ class PetConfig {
   }
 
   /// 热加载：文件被修改则重新读取，返回是否发生变更。
+  /// Restore every setting to the shipped defaults and persist the result.
+  /// This intentionally also clears user-selected model/soul paths.
+  void resetToDefaults({bool persist = true}) {
+    _apply(_defaults());
+    if (persist) {
+      save();
+    } else {
+      revision.value++;
+    }
+  }
+
   bool reloadIfChanged() {
     try {
       final stat = file.statSync();
@@ -171,102 +190,122 @@ class PetConfig {
   }
 
   /// 把当前内存配置写回文件（设置面板调用，即时生效）。
-  void save() {
+  bool save() {
     try {
       final f = file;
       f.parent.createSync(recursive: true);
-      f.writeAsStringSync(
-          const JsonEncoder.withIndent('  ').convert(toJson()));
+      f.writeAsStringSync(const JsonEncoder.withIndent('  ').convert(toJson()));
       _lastLoad = f.statSync().modified;
       revision.value++;
+      return true;
     } catch (_) {}
+    return false;
   }
 
   Map<String, dynamic> toJson() => {
-        '_说明': _defaults()['_说明'],
-        'appearance': {
-          'modelScale': modelScale,
-          'displayWidth': displayWidth,
-          'displayHeight': displayHeight,
-          'hOffset': hOffset,
-          'vOffset': vOffset,
-          'modelOpacity': modelOpacity,
-          'soundEnabled': soundEnabled,
-          'soundVolume': soundVolume,
-          'bubbleFontSize': bubbleFontSize,
-          'bubbleAutoHideSeconds': bubbleAutoHideSeconds,
-          'darkMode': darkMode,
-          'modelPath': modelPath,
-        },
-        'proactive': {
-          'enabled': proactiveEnabled,
-          'minIntervalMinutes': minIntervalMinutes,
-          'maxPerHour': maxPerHour,
-          'longSessionMinutes': longSessionMinutes,
-          'randomNudgeChance': randomNudgeChance,
-          'triggers': {
-            'hourly': triggerHourly,
-            'lateNight': triggerLateNight,
-            'longSession': triggerLongSession,
-            'appSwitchSpike': triggerAppSwitchSpike,
-            'randomNudge': triggerRandomNudge,
-            'idleReturn': triggerIdleReturn,
-            'focusReminder': triggerFocusReminder,
-            'memoryNudge': triggerMemoryNudge,
-          },
-        },
-        'chat': {
-          'autoHideSeconds': chatAutoHideSeconds,
-        },
-        'sleep': {
-          'enabled': sleepEnabled,
-          'idleMinutes': sleepIdleMinutes,
-          'adaptiveFrequency': adaptiveFrequency,
-        },
-        'ai': {
-          'enabled': aiEnabled,
-          'baseUrl': aiBaseUrl,
-          'model': aiModel,
-          'temperature': aiTemperature,
-          'maxTokens': aiMaxTokens,
-          'soulFile': soulFile,
-        },
-        'log': {
-          'enabled': logEnabled,
-          'level': logLevel,
-        },
-        'window': {
-          'alwaysOnTop': alwaysOnTop,
-          'skipTaskbar': skipTaskbar,
-          'startVisible': startVisible,
-          'autoFitWindow': autoFitWindow,
-        },
-      };
+    '_说明': _defaults()['_说明'],
+    'appearance': {
+      'modelScale': modelScale,
+      'displayWidth': displayWidth,
+      'displayHeight': displayHeight,
+      'hOffset': hOffset,
+      'vOffset': vOffset,
+      'modelOpacity': modelOpacity,
+      'soundEnabled': soundEnabled,
+      'soundVolume': soundVolume,
+      'bubbleFontSize': bubbleFontSize,
+      'bubbleAutoHideSeconds': bubbleAutoHideSeconds,
+      'darkMode': darkMode,
+      'settingsOpacity': settingsOpacity,
+      'modelPath': modelPath,
+    },
+    'proactive': {
+      'enabled': proactiveEnabled,
+      'minIntervalMinutes': minIntervalMinutes,
+      'maxPerHour': maxPerHour,
+      'longSessionMinutes': longSessionMinutes,
+      'randomNudgeChance': randomNudgeChance,
+      'triggers': {
+        'hourly': triggerHourly,
+        'lateNight': triggerLateNight,
+        'longSession': triggerLongSession,
+        'appSwitchSpike': triggerAppSwitchSpike,
+        'randomNudge': triggerRandomNudge,
+        'idleReturn': triggerIdleReturn,
+        'focusReminder': triggerFocusReminder,
+        'memoryNudge': triggerMemoryNudge,
+      },
+    },
+    'chat': {'autoHideSeconds': chatAutoHideSeconds},
+    'sleep': {
+      'enabled': sleepEnabled,
+      'idleMinutes': sleepIdleMinutes,
+      'adaptiveFrequency': adaptiveFrequency,
+    },
+    'ai': {
+      'enabled': aiEnabled,
+      'authMode': aiAuthMode,
+      'apiKey': aiApiKey,
+      'baseUrl': aiBaseUrl,
+      'model': aiModel,
+      'temperature': aiTemperature,
+      'maxTokens': aiMaxTokens,
+      'soulFile': soulFile,
+      'soulText': soulText,
+    },
+    'log': {'enabled': logEnabled, 'level': logLevel},
+    'window': {
+      'alwaysOnTop': alwaysOnTop,
+      'skipTaskbar': skipTaskbar,
+      'startVisible': startVisible,
+      'autoFitWindow': autoFitWindow,
+    },
+  };
+
+  num _number(Object? value, num fallback) => value is num ? value : fallback;
 
   void _apply(Map<String, dynamic> json) {
     final a = json['appearance'];
     if (a is Map<String, dynamic>) {
-      modelScale = (a['modelScale'] as num?)?.toDouble() ?? 1.0;
-      displayWidth = (a['displayWidth'] as num?)?.toInt() ?? 440;
-      displayHeight = (a['displayHeight'] as num?)?.toInt() ?? 640;
-      hOffset = (a['hOffset'] as num?)?.toInt() ?? 0;
-      vOffset = (a['vOffset'] as num?)?.toInt() ?? 10;
-      modelOpacity = (a['modelOpacity'] as num?)?.toDouble() ?? 1.0;
+      modelScale = _number(a['modelScale'], 1.0).clamp(0.1, 3.0).toDouble();
+      displayWidth = _number(a['displayWidth'], 440).clamp(180, 1200).toInt();
+      displayHeight = _number(a['displayHeight'], 640).clamp(240, 1600).toInt();
+      hOffset = _number(a['hOffset'], 0).clamp(-2000, 2000).toInt();
+      vOffset = _number(a['vOffset'], 10).clamp(-2000, 2000).toInt();
+      modelOpacity = _number(a['modelOpacity'], 1.0).clamp(0.1, 1.0).toDouble();
       soundEnabled = a['soundEnabled'] as bool? ?? false;
-      soundVolume = (a['soundVolume'] as num?)?.toDouble() ?? 0.8;
-      bubbleFontSize = (a['bubbleFontSize'] as num?)?.toDouble() ?? 13.0;
-      bubbleAutoHideSeconds =
-          (a['bubbleAutoHideSeconds'] as num?)?.toInt() ?? 8;
+      soundVolume = _number(a['soundVolume'], 0.8).clamp(0.0, 1.0).toDouble();
+      bubbleFontSize = _number(
+        a['bubbleFontSize'],
+        13.0,
+      ).clamp(8.0, 32.0).toDouble();
+      bubbleAutoHideSeconds = _number(
+        a['bubbleAutoHideSeconds'],
+        8,
+      ).clamp(1, 120).toInt();
       darkMode = a['darkMode'] as bool? ?? true;
+      settingsOpacity = _number(
+        a['settingsOpacity'],
+        0.96,
+      ).clamp(0.75, 1.0).toDouble();
       modelPath = a['modelPath']?.toString() ?? '';
     }
     final p = json['proactive'];
     if (p is Map<String, dynamic>) {
       proactiveEnabled = p['enabled'] as bool? ?? true;
-      minIntervalMinutes = (p['minIntervalMinutes'] as num?)?.toDouble() ?? 20;
-      maxPerHour = (p['maxPerHour'] as num?)?.toInt() ?? 2;
-      longSessionMinutes = (p['longSessionMinutes'] as num?)?.toInt() ?? 120;
-      randomNudgeChance = (p['randomNudgeChance'] as num?)?.toDouble() ?? 0.25;
+      minIntervalMinutes = _number(
+        p['minIntervalMinutes'],
+        20,
+      ).clamp(1.0, 1440.0).toDouble();
+      maxPerHour = _number(p['maxPerHour'], 2).clamp(0, 24).toInt();
+      longSessionMinutes = _number(
+        p['longSessionMinutes'],
+        120,
+      ).clamp(1, 1440).toInt();
+      randomNudgeChance = _number(
+        p['randomNudgeChance'],
+        0.25,
+      ).clamp(0.0, 1.0).toDouble();
       final t = p['triggers'];
       if (t is Map<String, dynamic>) {
         triggerHourly = t['hourly'] as bool? ?? true;
@@ -281,22 +320,31 @@ class PetConfig {
     }
     final c = json['chat'];
     if (c is Map<String, dynamic>) {
-      chatAutoHideSeconds = (c['autoHideSeconds'] as num?)?.toInt() ?? 20;
+      chatAutoHideSeconds = _number(
+        c['autoHideSeconds'],
+        20,
+      ).clamp(1, 600).toInt();
     }
     final sl = json['sleep'];
     if (sl is Map<String, dynamic>) {
       sleepEnabled = sl['enabled'] as bool? ?? true;
-      sleepIdleMinutes = (sl['idleMinutes'] as num?)?.toInt() ?? 15;
+      sleepIdleMinutes = _number(sl['idleMinutes'], 15).clamp(1, 1440).toInt();
       adaptiveFrequency = sl['adaptiveFrequency'] as bool? ?? true;
     }
     final ai = json['ai'];
     if (ai is Map<String, dynamic>) {
       aiEnabled = ai['enabled'] as bool? ?? true;
-      aiBaseUrl = ai['baseUrl']?.toString() ?? 'https://api.deepseek.com/v1';
-      aiModel = ai['model']?.toString() ?? 'deepseek-chat';
-      aiTemperature = (ai['temperature'] as num?)?.toDouble() ?? 0.8;
-      aiMaxTokens = (ai['maxTokens'] as num?)?.toInt() ?? 800;
+      aiAuthMode = ai['authMode']?.toString() ?? 'openai_api_key';
+      aiApiKey = ai['apiKey']?.toString() ?? '';
+      aiBaseUrl = ai['baseUrl']?.toString() ?? 'https://api.openai.com/v1';
+      aiModel = ai['model']?.toString() ?? 'gpt-5.6-luna';
+      aiTemperature = _number(
+        ai['temperature'],
+        0.8,
+      ).clamp(0.0, 2.0).toDouble();
+      aiMaxTokens = _number(ai['maxTokens'], 800).clamp(32, 32768).toInt();
       soulFile = ai['soulFile']?.toString() ?? '';
+      soulText = ai['soulText']?.toString() ?? '';
     }
     final lg = json['log'];
     if (lg is Map<String, dynamic>) {

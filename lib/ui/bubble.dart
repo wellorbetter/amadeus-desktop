@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// 桌宠气泡：显示 AI 消息，可流式更新，自动隐藏。
-class PetBubble extends StatelessWidget {
+/// Chat reply bubble. Long replies remain readable and streaming replies keep
+/// the newest text visible without hiding the bubble mid-request.
+class PetBubble extends StatefulWidget {
   const PetBubble({
     super.key,
     required this.text,
@@ -16,46 +17,98 @@ class PetBubble extends StatelessWidget {
   final double fontSize;
 
   @override
+  State<PetBubble> createState() => _PetBubbleState();
+}
+
+class _PetBubbleState extends State<PetBubble> {
+  final ScrollController _scroll = ScrollController();
+  bool _followTail = true;
+
+  @override
+  void didUpdateWidget(covariant PetBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_followTail || !_scroll.hasClients) return;
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final height = MediaQuery.sizeOf(context).height;
     return AnimatedOpacity(
-      opacity: visible ? 1 : 0,
-      duration: const Duration(milliseconds: 250),
-      child: IgnorePointer(
+      opacity: widget.visible ? 1 : 0,
+      duration: const Duration(milliseconds: 180),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: 40,
+          maxWidth: width.clamp(180.0, 340.0) - 24,
+          maxHeight: (height * .38).clamp(100.0, 240.0),
+        ),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 300, maxHeight: 100),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: const Color(0xE6202540),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: const Color(0x557C8CFF)),
             boxShadow: const [
-              BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4)),
+              BoxShadow(
+                color: Colors.black38,
+                blurRadius: 12,
+                offset: Offset(0, 4),
+              ),
             ],
           ),
-          // ????????????????????
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 76),
-            child: SingleChildScrollView(
-              reverse: false,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Flexible(
-                    child: Text(
-                      text,
-                      style: TextStyle(color: Colors.white, fontSize: fontSize, height: 1.5),
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is UserScrollNotification) {
+                _followTail =
+                    notification.metrics.pixels >=
+                    notification.metrics.maxScrollExtent - 24;
+              }
+              return false;
+            },
+            child: Scrollbar(
+              controller: _scroll,
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                controller: _scroll,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.text,
+                        softWrap: true,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: widget.fontSize,
+                          height: 1.5,
+                        ),
+                      ),
                     ),
-                  ),
-                  if (typing) ...[
-                    const SizedBox(width: 8),
-                    const SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF7C8CFF)),
-                    ),
+                    if (widget.typing) ...[
+                      const SizedBox(width: 8),
+                      const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFF7C8CFF),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),

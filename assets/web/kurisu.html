@@ -272,6 +272,8 @@
   }
 
   // 模型实际绘制范围（像素级扫描；像素/CSS 比例按 canvas 实际尺寸动态计算）
+  // Reuse the readback buffer: a typical 880x1280 canvas is about 4.5 MB.
+  var modelPixels = null, modelPixelsW = 0, modelPixelsH = 0;
   function modelBounds() {
     var canvas = document.querySelector("canvas");
     if (!canvas) return null;
@@ -280,7 +282,12 @@
     var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl") || canvas.getContext("webgl2");
     if (!gl) return null;
     var w = canvas.width, h = canvas.height;
-    var px = new Uint8Array(w * h * 4);
+    if (!modelPixels || modelPixelsW !== w || modelPixelsH !== h) {
+      modelPixels = new Uint8Array(w * h * 4);
+      modelPixelsW = w;
+      modelPixelsH = h;
+    }
+    var px = modelPixels;
     try {
       gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
     } catch (e) { return "err:" + e.message; }
@@ -551,8 +558,12 @@
       var vw = window.innerWidth, vh = window.innerHeight;
       // 画布固定为 displayWidth x displayHeight（不随窗口收缩），
       // 模型渲染空间跨 reload 保持一致；窗口比画布小时用负偏移定位模型。
-      var dw = Math.max(160, winCfg.displayWidth);
-      var dh = Math.max(160, winCfg.displayHeight);
+      // Live2D scale is applied inside the canvas. Reserve matching render
+      // space, otherwise a large model is clipped before Flutter can measure
+      // it and resize the native window.
+      var renderScale = Math.max(1, Number(winCfg.modelScale) || 1);
+      var dw = Math.max(160, Math.ceil(winCfg.displayWidth * renderScale));
+      var dh = Math.max(160, Math.ceil(winCfg.displayHeight * renderScale));
       canvasSize = { w: dw, h: dh };
       clearStage();
       // live2d-widget deepmerge only sets null fields on re-init;
@@ -684,6 +695,12 @@
       if (Math.abs(winCfg.modelScale - scaleBefore) > 0.001) {
         petLog("appearance scale-change -> reinit model scale=" + winCfg.modelScale);
         reinitModel();
+        // reinitModel creates the canvas asynchronously; measuring now would
+        // read the old canvas or an empty one.
+        setTimeout(function () {
+          startFit();
+          reportModelFit(true, true);
+        }, 350);
       }
       layoutContainer();
       return true;
@@ -715,6 +732,7 @@
     requestFit: function (allowShrink) {
       startFit();
       reportModelFit(true, !!allowShrink);
+      setTimeout(function () { reportModelFit(true, !!allowShrink); }, 350);
       return true;
     }
   };

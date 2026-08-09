@@ -29,6 +29,12 @@ class PetSoul {
 
   void load() {
     final cfg = PetConfig.instance;
+    if (cfg.soulText.trim().isNotEmpty) {
+      _text = cfg.soulText.trim();
+      _source = 'settings';
+      PetLog.i('soul: loaded ${_text.length} chars from settings');
+      return;
+    }
     final candidates = <String>[
       if (cfg.soulFile.trim().isNotEmpty) cfg.soulFile.trim(),
       '${_appDataDir()}/timepet/soul.md',

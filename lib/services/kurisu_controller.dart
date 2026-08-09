@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -16,6 +17,7 @@ class KurisuController {
   static const double inputReserve = 84.0;
 
   final WebviewController controller = WebviewController();
+  static const MethodChannel _windowChannel = MethodChannel('timepet/window');
 
   bool _initialized = false;
   int _navCount = 0;
@@ -120,24 +122,21 @@ class KurisuController {
         final m = RegExp(r'user-menu (-?\d+) (-?\d+)').firstMatch(text);
         if (m != null) {
           PetLog.i('kurisu: user-menu x=${m.group(1)} y=${m.group(2)}');
-          onUserMenu?.call(
-            int.parse(m.group(1)!),
-            int.parse(m.group(2)!),
-          );
+          onUserMenu?.call(int.parse(m.group(1)!), int.parse(m.group(2)!));
         }
       } else if (text.contains('model-fit')) {
         PetLog.i('kurisu: $text');
         final shrink = text.contains('model-fit-shrink');
-        final m = RegExp(r'model-fit(?:-shrink)? x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)')
-            .firstMatch(text);
+        final m = RegExp(
+          r'model-fit(?:-shrink)? x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',
+        ).firstMatch(text);
         if (m != null) {
-          onModelFit?.call(
-            int.parse(m.group(1)!),
-            int.parse(m.group(2)!),
-            int.parse(m.group(3)!),
-            int.parse(m.group(4)!),
-            shrink,
-          );
+          final x = int.parse(m.group(1)!);
+          final y = int.parse(m.group(2)!);
+          final w = int.parse(m.group(3)!);
+          final h = int.parse(m.group(4)!);
+          unawaited(_windowChannel.invokeMethod('setHitRegion', [x, y, w, h]));
+          onModelFit?.call(x, y, w, h, shrink);
         }
       } else {
         PetLog.i('kurisu: webMessage=$text');
@@ -161,9 +160,12 @@ class KurisuController {
       final fit = lastFit;
       if (fit != null) {
         await _exec(
-            'window.pet && window.pet.fitToModel({x: ${fit.x}, y: ${fit.y}, w: ${fit.w}, h: ${fit.h}})');
+          'window.pet && window.pet.fitToModel({x: ${fit.x}, y: ${fit.y}, w: ${fit.w}, h: ${fit.h}})',
+        );
         await _exec('window.pet && window.pet.layout()');
-        PetLog.i('kurisu: after-navigation #$n refit ${fit.w}x${fit.h}@${fit.x},${fit.y}');
+        PetLog.i(
+          'kurisu: after-navigation #$n refit ${fit.w}x${fit.h}@${fit.x},${fit.y}',
+        );
       }
       // 3) 重新测量上报（增长才改窗口；force 用于按当前测量重定位）
       await requestFit();
@@ -173,7 +175,9 @@ class KurisuController {
         for (var i = 0; i < 6 && !ok; i++) {
           await Future.delayed(const Duration(milliseconds: 500));
           ok = await _appearanceMatches();
-          if (!ok) PetLog.i('kurisu: after-navigation #$n waiting appearance i=$i');
+          if (!ok) {
+            PetLog.i('kurisu: after-navigation #$n waiting appearance i=$i');
+          }
         }
         await reveal();
         PetLog.i('kurisu: after-navigation #$n fallback reveal ok=$ok');
@@ -187,17 +191,21 @@ class KurisuController {
   Future<bool> _appearanceMatches() async {
     try {
       final r = await controller.executeScript(
-          'window.pet && window.pet.getAppearance ? JSON.stringify(window.pet.getAppearance()) : "NO_PET"');
+        'window.pet && window.pet.getAppearance ? JSON.stringify(window.pet.getAppearance()) : "NO_PET"',
+      );
       if (r is String && r.startsWith('{')) {
         final map = jsonDecode(r) as Map<String, dynamic>;
         final cfg = PetConfig.instance;
         final scale = (map['modelScale'] as num?)?.toDouble() ?? -1;
         final vOff = (map['vOffset'] as num?)?.toDouble() ?? -1;
         final op = (map['modelOpacity'] as num?)?.toDouble() ?? -1;
-        final ok = (scale - cfg.modelScale).abs() < 0.001 &&
+        final ok =
+            (scale - cfg.modelScale).abs() < 0.001 &&
             (vOff - cfg.vOffset).abs() < 0.001 &&
             (op - cfg.modelOpacity).abs() < 0.001;
-        PetLog.i('kurisu: appearance check scale=$scale vOff=$vOff op=$op ok=$ok');
+        PetLog.i(
+          'kurisu: appearance check scale=$scale vOff=$vOff op=$op ok=$ok',
+        );
         return ok;
       }
     } catch (e) {
@@ -213,15 +221,18 @@ class KurisuController {
       if (!_initialized) return;
       try {
         final log = await controller.executeScript(
-            'window.__petLog ? JSON.stringify(window.__petLog) : "NO_PET_LOG"');
+          'window.__petLog ? JSON.stringify(window.__petLog) : "NO_PET_LOG"',
+        );
         final canvas = await controller.executeScript(
-            '!!document.querySelector("canvas")');
+          '!!document.querySelector("canvas")',
+        );
         PetLog.i('kurisu: poll#$i canvas=$canvas log=$log');
         if (canvas == true || canvas == 'true') {
           PetLog.i('kurisu: canvas ready');
           try {
             final diag = await controller.executeScript(
-                'window.pet && window.pet.diag ? window.pet.diag() : "NO_DIAG"');
+              'window.pet && window.pet.diag ? window.pet.diag() : "NO_DIAG"',
+            );
             PetLog.i('kurisu: diag=$diag');
           } catch (e) {
             PetLog.e('kurisu: diag error: $e');
@@ -275,14 +286,17 @@ class KurisuController {
       '})',
     );
     PetLog.i(
-        'kurisu: applyAppearance w=${cfg.displayWidth} h=${cfg.displayHeight} '
-        'v=${cfg.vOffset} op=${cfg.modelOpacity}');
+      'kurisu: applyAppearance w=${cfg.displayWidth} h=${cfg.displayHeight} '
+      'v=${cfg.vOffset} op=${cfg.modelOpacity}',
+    );
   }
 
   /// 窗口贴合模型：告诉页面模型的画布内绘制范围（CSS px）。
   Future<void> fitToModel(int x, int y, int w, int h) async {
     lastFit = (x: x, y: y, w: w, h: h);
-    await _exec('window.pet && window.pet.fitToModel({x: $x, y: $y, w: $w, h: $h})');
+    await _exec(
+      'window.pet && window.pet.fitToModel({x: $x, y: $y, w: $w, h: $h})',
+    );
     PetLog.i('kurisu: fitToModel x=$x y=$y w=$w h=$h');
   }
 
@@ -295,6 +309,24 @@ class KurisuController {
   Future<void> requestFit({bool allowShrink = false}) async {
     await _exec('window.pet && window.pet.requestFit($allowShrink)');
     PetLog.i('kurisu: requestFit allowShrink=$allowShrink');
+  }
+
+  /// Accept the bottom Flutter input bar while it is visible. The native
+  /// window is otherwise click-through outside the Live2D model region.
+  Future<void> setInputHitRegion(bool enabled) async {
+    if (enabled) {
+      await _windowChannel.invokeMethod('setHitRegion', [0, 0, 10000, 10000]);
+      return;
+    }
+    final fit = lastFit;
+    if (fit != null) {
+      await _windowChannel.invokeMethod('setHitRegion', [
+        fit.x,
+        fit.y,
+        fit.w,
+        fit.h,
+      ]);
+    }
   }
 
   /// 显示模型（首帧贴合完成后调用，避免启动时先大后小的变形）。
@@ -315,8 +347,15 @@ class KurisuController {
 
   /// 重新加载模型页面（右键菜单「重新加载模型」）。
   Future<void> reload() async {
-    await _exec('location.reload()');
+    if (!_initialized) return;
+    final modelParam = _modelFile == null
+        ? ''
+        : '?model=${Uri.encodeComponent(_modelFile!)}';
+    final url = 'https://pet.local/kurisu.html$modelParam';
+    PetLog.i('kurisu: reload current model=${_modelFile ?? 'none'}');
+    await controller.loadUrl(url);
   }
+
   Future<void> expression() async {
     await _exec('window.pet && window.pet.expression()');
   }
