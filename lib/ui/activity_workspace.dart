@@ -304,8 +304,9 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
                   children: [
                     Text(
                       status,
-                      style: Theme.of(context).textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -458,8 +459,9 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
                   children: [
                     Text(
                       title,
-                      style: Theme.of(context).textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     if (subtitle != null) ...[
                       const SizedBox(height: 4),
@@ -696,8 +698,9 @@ class _PipelineView extends StatelessWidget {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary
-                      .withValues(alpha: 0.1),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(steps[index].$1, size: 18),

@@ -345,13 +345,11 @@ class ActivityHistory {
       return null;
     }
     try {
-      final map = await _channel.invokeMapMethod<Object?, Object?>(
-        'getSnapshot',
-        {
-          'idleThreshold': PetConfig.instance.activityIdleSeconds,
-          'excludedApps': PetConfig.instance.activityExcludedApps,
-        },
-      );
+      final map = await _channel
+          .invokeMapMethod<Object?, Object?>('getSnapshot', {
+            'idleThreshold': PetConfig.instance.activityIdleSeconds,
+            'excludedApps': PetConfig.instance.activityExcludedApps,
+          });
       if (map == null) {
         _sensorStatus = ActivitySensorStatus.unavailable;
         _sensorMessage = '原生传感器没有返回活动样本';
