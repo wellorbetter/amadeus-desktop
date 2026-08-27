@@ -138,7 +138,7 @@ flutter build macos --release
 flutter build linux --release
 ```
 
-GitHub Actions 会在原生 Windows、macOS 和 Ubuntu runner 上完成 Release 构建；Windows/Ubuntu 还会强制执行完整入口 smoke 和原生桌面录屏。三端都会用隔离的合成数据运行真实设置组件并生成验收游览；macOS 使用 runner 上按 macOS 平台语义渲染的 UI 模拟视频。macOS 托管环境无法可靠提供 WindowServer/录屏授权，因此 GUI 进程 smoke 和原生录屏是尽力项，仍需真机清单兜底。CI 的 macOS artifact 是未公证的开发产物；公开分发仍需使用 Apple Developer ID 签名并提交 notarization，否则 Gatekeeper 会提示无法验证开发者。
+GitHub Actions 会在原生 Windows、macOS 和 Ubuntu runner 上完成 Release 构建；Windows/Ubuntu 还会强制执行完整入口 smoke 和原生桌面录屏。三端都会用隔离的合成数据运行真实设置组件并生成验收游览；macOS 视频由 Ubuntu 虚拟桌面运行真实 Release、按 Flutter 的 macOS 平台语义模拟录制，并在 artifact 名称中明确标注。macOS 托管环境无法可靠提供 WindowServer/录屏授权，因此 GUI 进程 smoke 和原生录屏是尽力项，仍需真机清单兜底。CI 的 macOS artifact 是未公证的开发产物；公开分发仍需使用 Apple Developer ID 签名并提交 notarization，否则 Gatekeeper 会提示无法验证开发者。
 
 可重复的本机 smoke 与录屏命令见 [`tools/acceptance/README.md`](tools/acceptance/README.md)。验收模式使用临时配置、临时活动库和虚构 API Key，不读取或修改普通用户的配置、记忆、模型与凭据。
 

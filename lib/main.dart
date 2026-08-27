@@ -24,7 +24,19 @@ void main(List<String> args) async {
         // Keep release acceptance hermetic: do not initialize the normal
         // logger, config, secrets, tray, or multi-window services.
         FlutterError.onError = FlutterError.presentError;
-        runApp(const AcceptanceDemoApp());
+        final platformName = Platform.environment['AMADEUS_ACCEPTANCE_PLATFORM']
+            ?.toLowerCase();
+        final TargetPlatform? demoPlatform;
+        if (platformName == 'windows') {
+          demoPlatform = TargetPlatform.windows;
+        } else if (platformName == 'macos') {
+          demoPlatform = TargetPlatform.macOS;
+        } else if (platformName == 'linux') {
+          demoPlatform = TargetPlatform.linux;
+        } else {
+          demoPlatform = null;
+        }
+        runApp(AcceptanceDemoApp(targetPlatform: demoPlatform));
         return;
       }
 

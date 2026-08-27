@@ -11,11 +11,11 @@ The demo does not initialize regular config, secrets, memory, models, tray, or
 multi-window services. It is an offline visual tour, not a substitute for the
 full-entry smoke check.
 
-CI additionally exports each macOS-simulated frame in a fresh Flutter test
-process and encodes a deterministic 1280×800 MP4. That artifact is explicitly
-named `ui-simulation-video`; it proves layout and interaction sequencing, while
-native build/smoke results remain separate. Windows and Ubuntu produce native
-desktop recordings instead.
+CI additionally launches the native Linux release in a separate virtual desktop
+with Flutter's `TargetPlatform.macOS` semantics and records a deterministic
+1280×800 MP4. That artifact is explicitly named `ui-simulation-video`; it proves
+layout and interaction sequencing, while the native macOS build remains a
+separate result. Windows and Ubuntu produce native desktop recordings.
 
 ## Ubuntu / Linux
 

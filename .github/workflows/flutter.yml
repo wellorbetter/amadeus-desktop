@@ -87,17 +87,6 @@ jobs:
       - name: Attempt full macOS GUI process smoke
         continue-on-error: true
         run: ./tools/acceptance/smoke_macos.sh build/macos/Build/Products/Release/Amadeus.app
-      - name: Install FFmpeg for macOS acceptance video
-        run: brew install ffmpeg
-      - name: Render macOS UI simulation frames
-        run: |
-          for index in 0 1 2 3 4 5 6; do
-            AMADEUS_ACCEPTANCE_FRAMES_DIR=build/acceptance/macos-frames \
-            AMADEUS_ACCEPTANCE_PLATFORM=macos \
-            AMADEUS_ACCEPTANCE_FRAME_INDEX="$index" \
-            flutter test --timeout 2m test/acceptance_capture_test.dart
-          done
-          ./tools/acceptance/frames_to_video.sh build/acceptance/macos-frames build/acceptance/amadeus-macos-simulation.mp4
       - name: Attempt macOS acceptance recording
         continue-on-error: true
         run: ./tools/acceptance/record_macos.sh build/macos/Build/Products/Release/Amadeus.app build/acceptance/amadeus-macos.mov
@@ -113,12 +102,6 @@ jobs:
           name: amadeus-macos-acceptance-video
           path: build/acceptance/amadeus-macos.mov
           if-no-files-found: warn
-      - name: Upload macOS UI simulation video
-        uses: actions/upload-artifact@v4
-        with:
-          name: amadeus-macos-ui-simulation-video
-          path: build/acceptance/amadeus-macos-simulation.mp4
-          if-no-files-found: error
 
   linux:
     name: Build and record Ubuntu
@@ -142,6 +125,11 @@ jobs:
         run: ./tools/acceptance/smoke_linux.sh build/linux/x64/release/bundle/amadeus
       - name: Record Ubuntu release acceptance tour
         run: ./tools/acceptance/record_linux.sh build/linux/x64/release/bundle/amadeus build/acceptance/amadeus-ubuntu.mp4
+      - name: Record macOS-semantics UI simulation
+        run: |
+          AMADEUS_ACCEPTANCE_PLATFORM=macos \
+          AMADEUS_DEMO_DISPLAY=:97 \
+          ./tools/acceptance/record_linux.sh build/linux/x64/release/bundle/amadeus build/acceptance/amadeus-macos-simulation.mp4
       - uses: actions/upload-artifact@v4
         with:
           name: amadeus-ubuntu
@@ -151,4 +139,9 @@ jobs:
         with:
           name: amadeus-ubuntu-acceptance-video
           path: build/acceptance/amadeus-ubuntu.mp4
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-macos-ui-simulation-video
+          path: build/acceptance/amadeus-macos-simulation.mp4
           if-no-files-found: error
