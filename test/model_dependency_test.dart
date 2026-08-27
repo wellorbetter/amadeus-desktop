@@ -58,11 +58,13 @@ void main() {
   test('model package rejects multiple entries instead of guessing', () async {
     final root = await Directory.systemTemp.createTemp('timepet-package-');
     addTearDown(() => root.delete(recursive: true));
-    await File('${root.path}/a.model.json')
-        .writeAsString(jsonEncode({'model': 'a.moc', 'textures': <String>[]}));
+    await File(
+      '${root.path}/a.model.json',
+    ).writeAsString(jsonEncode({'model': 'a.moc', 'textures': <String>[]}));
     await File('${root.path}/a.moc').writeAsString('moc');
-    await File('${root.path}/b.model.json')
-        .writeAsString(jsonEncode({'model': 'b.moc', 'textures': <String>[]}));
+    await File(
+      '${root.path}/b.model.json',
+    ).writeAsString(jsonEncode({'model': 'b.moc', 'textures': <String>[]}));
     await File('${root.path}/b.moc').writeAsString('moc');
 
     expect(() => PetModel.packageEntries(root.path), returnsNormally);

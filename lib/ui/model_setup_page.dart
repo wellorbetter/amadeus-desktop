@@ -184,14 +184,18 @@ class _ModelSetupPageState extends State<ModelSetupPage> {
             const SizedBox(height: 12),
             Text(
               '让时间记录，变成一次有分寸的陪伴。',
-              style: Theme.of(context).textTheme.displaySmall
-                  ?.copyWith(fontWeight: FontWeight.w600, height: 1.15),
+              style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                height: 1.15,
+              ),
             ),
             const SizedBox(height: 16),
             Text(
               'Amadeus 是独立应用。TimeTrace 只是可选的本地数据源：没有它，桌宠仍能对话；连接后，它才会从聚合记录中理解你的节奏。',
-              style: Theme.of(context).textTheme.bodyLarge
-                  ?.copyWith(color: scheme.onSurfaceVariant, height: 1.65),
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: scheme.onSurfaceVariant,
+                height: 1.65,
+              ),
             ),
             const SizedBox(height: 30),
             LayoutBuilder(
@@ -254,8 +258,9 @@ class _ModelSetupPageState extends State<ModelSetupPage> {
             const SizedBox(height: 12),
             Text(
               '你控制形象、人格、数据与模型服务。',
-              style: Theme.of(context).textTheme.headlineLarge
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 14),
             Text(
@@ -305,8 +310,9 @@ class _ModelSetupPageState extends State<ModelSetupPage> {
             const SizedBox(height: 12),
             Text(
               '先让你的桌面伴侣出现。',
-              style: Theme.of(context).textTheme.headlineLarge
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 12),
             Text(
@@ -437,8 +443,9 @@ class _OnboardingRail extends StatelessWidget {
         children: [
           Text(
             '初始设置',
-            style: Theme.of(context).textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 28),
           for (var i = 0; i < labels.length; i++)

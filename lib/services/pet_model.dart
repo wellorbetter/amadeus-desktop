@@ -49,10 +49,9 @@ class PetModel {
     if (missing.isNotEmpty) {
       throw ArgumentError('模型包缺少资源：${missing.take(3).join('、')}');
     }
-    final files = Directory(packagePath)
-        .listSync(recursive: true, followLinks: false)
-        .whereType<File>()
-        .length;
+    final files = Directory(
+      packagePath,
+    ).listSync(recursive: true, followLinks: false).whereType<File>().length;
     return (entryPath: entry.path, files: files);
   }
 
@@ -283,8 +282,9 @@ class PetModel {
             !extensions.any(lower.endsWith)) {
           return;
         }
-        if (!File('${root.path}${Platform.pathSeparator}$normalized')
-            .existsSync()) {
+        if (!File(
+          '${root.path}${Platform.pathSeparator}$normalized',
+        ).existsSync()) {
           missing.add(normalized);
         }
       }

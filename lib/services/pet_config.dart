@@ -91,7 +91,8 @@ class PetConfig {
   File get file => _file ??= File(path);
 
   Map<String, dynamic> _defaults() => {
-    '_说明': 'TimeTrace 桌宠动态配置。设置面板修改即时生效；外部编辑后 60 秒内自动热加载（无需重启）。proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠（空闲时停止主动对话/记忆审核，省 token）；appearance 为模型/气泡外观；ai 为对话模型；log 为日志；window 为窗口行为。',
+    '_说明':
+        'TimeTrace 桌宠动态配置。设置面板修改即时生效；外部编辑后 60 秒内自动热加载（无需重启）。proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠（空闲时停止主动对话/记忆审核，省 token）；appearance 为模型/气泡外观；ai 为对话模型；log 为日志；window 为窗口行为。',
     'appearance': {
       'modelScale': 1.0,
       'displayWidth': 440,

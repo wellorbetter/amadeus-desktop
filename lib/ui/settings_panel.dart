@@ -200,8 +200,10 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(width: 11),
             Text(
               'Amadeus',
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700, letterSpacing: 0.3),
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+              ),
             ),
             if (!compact) ...[
               const SizedBox(width: 10),
@@ -305,8 +307,9 @@ class _SettingsPageState extends State<SettingsPage> {
             children: [
               Text(
                 _section.label,
-                style: Theme.of(context).textTheme.headlineMedium
-                    ?.copyWith(fontWeight: FontWeight.w600),
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 6),
               Text(
@@ -1106,8 +1109,9 @@ class _SettingsCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: Theme.of(context).textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     if (subtitle != null) ...[
                       const SizedBox(height: 4),
@@ -1181,8 +1185,9 @@ class _OverviewCard extends StatelessWidget {
               const SizedBox(height: 3),
               Text(
                 value,
-                style: Theme.of(context).textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w600),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 6),
               Text(
