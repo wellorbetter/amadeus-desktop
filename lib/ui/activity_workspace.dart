@@ -361,6 +361,7 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
       children: [
         for (var index = 0; index < episodes.length; index++) ...[
           _EpisodeRow(
+            key: ValueKey('activity-episode-${episodes[index].id}'),
             episode: episodes[index],
             onTap: () => _showEpisodeDetails(episodes[index]),
           ),
@@ -715,7 +716,7 @@ class _PipelineView extends StatelessWidget {
 }
 
 class _EpisodeRow extends StatelessWidget {
-  const _EpisodeRow({required this.episode, required this.onTap});
+  const _EpisodeRow({super.key, required this.episode, required this.onTap});
 
   final ActivityEpisode episode;
   final VoidCallback onTap;

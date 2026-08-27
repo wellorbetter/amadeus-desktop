@@ -85,7 +85,7 @@ void main() {
     expect(find.text('7 天'), findsOneWidget);
     expect(find.text('30 天'), findsOneWidget);
 
-    await tester.tap(find.bySemanticsLabel('查看 Android Studio 活动片段详情'));
+    await tester.tap(find.byKey(const ValueKey('activity-episode-1')));
     await tester.pumpAndSettle();
     expect(find.text('活动片段详情'), findsOneWidget);
     expect(find.textContaining('没有窗口标题或输入内容'), findsOneWidget);
