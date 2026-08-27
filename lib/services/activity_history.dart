@@ -19,6 +19,13 @@ class _NewerActivitySchema implements Exception {
 
 enum ActivityDecision { active, idle, excluded }
 
+enum ActivitySensorStatus {
+  unknown,
+  available,
+  unsupportedSession,
+  unavailable,
+}
+
 class ActivitySnapshot {
   const ActivitySnapshot({
     required this.appName,
@@ -153,6 +160,8 @@ class ActivityHistory {
   String _currentForegroundApp = '-';
   int? _observedTimelineRevision;
   DateTime? _lastPurgeAt;
+  ActivitySensorStatus _sensorStatus = ActivitySensorStatus.unknown;
+  String? _sensorMessage;
 
   String get path => _pathOverride ?? AppPaths.activityFile.path;
   bool get initialized => _db != null;
@@ -160,6 +169,8 @@ class ActivityHistory {
   bool get currentlyIdle => _currentlyIdle;
   bool get hasCurrentSnapshot => _hasCurrentSnapshot;
   String get currentForegroundApp => _currentForegroundApp;
+  ActivitySensorStatus get sensorStatus => _sensorStatus;
+  String? get sensorMessage => _sensorMessage;
 
   Database get _database {
     final value = _db;
@@ -308,6 +319,12 @@ class ActivityHistory {
     try {
       init();
       final snapshot = await (_provider?.call() ?? _nativeSnapshot());
+      if (_provider != null) {
+        _sensorStatus = snapshot == null
+            ? ActivitySensorStatus.unavailable
+            : ActivitySensorStatus.available;
+        _sensorMessage = null;
+      }
       if (snapshot == null || snapshot.appName.isEmpty) return;
       recordSnapshot(snapshot);
       final now = DateTime.now();
@@ -324,17 +341,34 @@ class ActivityHistory {
   }
 
   Future<ActivitySnapshot?> _nativeSnapshot() async {
-    if (!Platform.isWindows && !Platform.isMacOS) return null;
+    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
+      return null;
+    }
     try {
-      final map = await _channel
-          .invokeMapMethod<Object?, Object?>('getSnapshot', {
-            'idleThreshold': PetConfig.instance.activityIdleSeconds,
-            'excludedApps': PetConfig.instance.activityExcludedApps,
-          });
-      return map == null ? null : ActivitySnapshot.fromMap(map);
+      final map = await _channel.invokeMapMethod<Object?, Object?>(
+        'getSnapshot',
+        {
+          'idleThreshold': PetConfig.instance.activityIdleSeconds,
+          'excludedApps': PetConfig.instance.activityExcludedApps,
+        },
+      );
+      if (map == null) {
+        _sensorStatus = ActivitySensorStatus.unavailable;
+        _sensorMessage = '原生传感器没有返回活动样本';
+        return null;
+      }
+      _sensorStatus = ActivitySensorStatus.available;
+      _sensorMessage = null;
+      return ActivitySnapshot.fromMap(map);
     } on MissingPluginException {
+      _sensorStatus = ActivitySensorStatus.unavailable;
+      _sensorMessage = '当前构建未安装原生活动传感器';
       return null;
     } on PlatformException catch (error) {
+      _sensorStatus = error.code == 'unsupported_session'
+          ? ActivitySensorStatus.unsupportedSession
+          : ActivitySensorStatus.unavailable;
+      _sensorMessage = error.message;
       PetLog.w('activity: native sensor unavailable: ${error.code}');
       return null;
     }
@@ -698,6 +732,8 @@ class ActivityHistory {
     _currentIdleSeconds = 0;
     _currentlyIdle = false;
     _currentForegroundApp = '-';
+    _sensorStatus = ActivitySensorStatus.unknown;
+    _sensorMessage = null;
   }
 
   String _dateKey(DateTime value) =>

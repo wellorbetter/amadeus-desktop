@@ -1,11 +1,14 @@
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:timepet/services/activity_history.dart';
 import 'package:timepet/services/pet_config.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('activity database preserves corrupt file and recreates schema', () {
     final root = Directory.systemTemp.createTempSync('amadeus-activity-test-');
     addTearDown(() => root.deleteSync(recursive: true));
@@ -64,6 +67,59 @@ void main() {
     root.deleteSync(recursive: true);
     PetConfig.instance.resetToDefaults(persist: false);
   });
+
+  test(
+    'Linux native channel sample enters the local observation stream',
+    () async {
+      if (!Platform.isLinux) return;
+      const channel = MethodChannel('amadeus/activity');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        expect(call.method, 'getSnapshot');
+        expect(call.arguments, isA<Map<Object?, Object?>>());
+        return <Object?, Object?>{
+          'appName': 'Code',
+          'appId': 'linux:Code',
+          'idleSeconds': 7,
+          'decision': 0,
+          'coreVersion': 1,
+        };
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+      await history.capture();
+
+      expect(history.sensorStatus, ActivitySensorStatus.available);
+      expect(history.hasCurrentSnapshot, isTrue);
+      expect(history.currentForegroundApp, 'Code');
+      expect(history.eventCount(), 1);
+    },
+  );
+
+  test(
+    'Linux Wayland sensor failure remains explicit and fail-closed',
+    () async {
+      if (!Platform.isLinux) return;
+      const channel = MethodChannel('amadeus/activity');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+        channel,
+        (_) => throw PlatformException(
+          code: 'unsupported_session',
+          message: 'Wayland global activity is unavailable.',
+        ),
+      );
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+      await history.capture();
+
+      expect(history.sensorStatus, ActivitySensorStatus.unsupportedSession);
+      expect(history.hasCurrentSnapshot, isFalse);
+      expect(history.eventCount(), 0);
+    },
+  );
 
   test('consecutive snapshots become a local activity episode', () {
     final now = DateTime.now();

@@ -5,7 +5,7 @@
 <h1 align="center">Amadeus · 个人桌面 Agent</h1>
 
 <p align="center">
-  本地优先、可主动交互、拥有用户可控记忆的 Windows / macOS 桌面伴侣，提供 Ubuntu 预览版
+  本地优先、可主动交互、拥有用户可控记忆的 Windows / macOS 桌面伴侣，提供 Ubuntu X11 预览版
   <br>
   <b>Flutter</b> · <b>Rust</b> · <b>Live2D</b> · <b>Built-in activity awareness</b> · <b>Local memory</b>
 </p>
@@ -54,7 +54,7 @@ Live2D 模型与 `soul.md` 分离：更换形象不会偷偷改写人格，修�
 - OpenAI / DeepSeek / 自定义 OpenAI 兼容接口
 - 流式对话与中断保护
 - 可配置主动触发、频率上限、忙时降噪与空闲休眠
-- Windows / macOS 内置活动感知：前台应用、空闲检测与本地时间线
+- Windows / macOS / Linux X11 内置活动感知：前台应用、空闲检测与本地时间线
 - 托盘一键暂停、应用排除列表、1–168 小时保留期与按范围清除
 - 本地 SQLite 工作记忆与经审核的长期记忆
 - Cubism 2.1 (`*.model.json`) 本地模型包导入与依赖校验
@@ -112,7 +112,7 @@ ChatGPT / Codex 订阅登录不能直接作为第三方桌面应用的 API 凭�
 | Agent Runtime | 已实现 | 组合身份、人格、工作记忆、语义记忆与单次上下文 |
 | Memory | 已实现 | 对话工作记忆与经审核的用户长期记忆；可查看、编辑、删除 |
 | Trigger | 已实现 | 候选生成、策略抑制、优先级竞争、交付确认与审计 |
-| Computer History | 已实现基础能力 | Windows/macOS 活动采集、短期事件、会话投影与基础统计；Linux 暂无原生活动传感器 |
+| Computer History | 已实现基础能力 | Windows/macOS/Linux X11 活动采集、短期事件、会话投影与基础统计；Wayland 明确 fail-closed |
 | Skill | 尚未实现 runtime | 只保留未来扩展位置，不进入当前能力声明 |
 | MCP | 尚未实现 | 当前没有工具发现、权限或调用运行时 |
 | Evolve | 尚未实现 | 当前不会自主修改人格、策略或代码 |
@@ -121,7 +121,7 @@ Amadeus 内化的是 Computer History/活动感知能力，不是整个 TimeTrac
 
 ## 构建
 
-环境要求：Flutter stable 与 Rust stable。Windows 需要 Visual Studio Desktop C++，macOS 需要当前 Xcode；Ubuntu 需要 Flutter Linux 桌面依赖、GTK 3、libsecret 与 Ayatana AppIndicator。
+环境要求：Flutter stable 与 Rust stable。Windows 需要 Visual Studio Desktop C++，macOS 需要当前 Xcode；Ubuntu 需要 Flutter Linux 桌面依赖、GTK 3、libsecret、X11/XScreenSaver 与 Ayatana AppIndicator。
 
 ```bash
 flutter pub get
@@ -163,9 +163,9 @@ GitHub Actions 会在原生 Windows、macOS 和 Ubuntu runner 上完成 Release 
 
 这一层参考了 Computer History 的可控性设计：明确开启状态、托盘暂停、数据源排除、短期原始记录和可清除时间线。数据流借鉴 Kafka 的事件日志与投影思想，但不引入 Kafka 运行时：原生层采集最小信号，Rust 在写入前做空闲、自身进程与排除项分类，SQLite `activity_events` 保存可按保留期清除的追加事件，Flutter 再把它投影为 `usage_sessions`、七日节律与对话所需的聚合上下文。
 
-当前实现刻意保持窄能力面：每 10 秒只向原生层询问前台应用标识与全局空闲秒数，不请求屏幕录制，也不读取窗口标题、文档内容、浏览历史或按键内容。Windows 使用 Win32 前台进程与 `GetLastInputInfo`；macOS 使用 `NSWorkspace.frontmostApplication` 与 `CGEventSource` 空闲时间。
+当前实现刻意保持窄能力面：每 10 秒只向原生层询问前台应用标识与全局空闲秒数，不请求屏幕录制，也不读取窗口标题、文档内容、浏览历史或按键内容。Windows 使用 Win32 前台进程与 `GetLastInputInfo`；macOS 使用 `NSWorkspace.frontmostApplication` 与 `CGEventSource` 空闲时间；Linux X11 使用 `_NET_ACTIVE_WINDOW` / `_NET_WM_PID`、`/proc/<pid>/comm` 与 XScreenSaver，只保留进程名，不读取窗口标题或可执行路径。
 
-Ubuntu 当前是诚实的预览层级：Agent 对话、设置、记忆、触发策略、托盘与本地数据层可以构建和启动；由于项目现用 WebView 方案没有 Linux 后端，形象区域显示原创 Flutter 回退界面，Live2D 导入渲染与原生 Computer History 采集暂不可用。
+Ubuntu 当前仍是预览层级：Agent 对话、设置、记忆、触发策略、托盘、本地数据层以及 X11 原生活动感知可以构建和启动；由于项目现用 WebView 方案没有 Linux 后端，形象区域显示原创 Flutter 回退界面，Live2D 导入渲染暂不可用。Wayland 没有统一、非侵入式的全局前台应用接口，因此传感器会明确显示不可用并停止采集，不会退化为截图、窗口标题抓取或输入监听。
 
 ## License
 

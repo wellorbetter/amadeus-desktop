@@ -5,7 +5,7 @@
 <h1 align="center">Amadeus · Personal Desktop Agent</h1>
 
 <p align="center">
-A local-first Flutter + Rust desktop companion with user-controlled memory for Windows and macOS, plus an Ubuntu preview
+A local-first Flutter + Rust desktop companion with user-controlled memory for Windows and macOS, plus an Ubuntu X11 preview
 </p>
 
 <p align="center"><a href="README.md">中文</a></p>
@@ -38,7 +38,7 @@ This separation matters:
 | --- | --- | --- |
 | Agent runtime | Implemented | Identity, conversation, context composition, and initiative |
 | Working + semantic memory | Implemented | Conversation context and audited user facts only |
-| Computer History | Implemented | Pausable, clearable, retention-bound lived observation |
+| Computer History | Implemented | Windows/macOS/Linux X11 observation; Wayland fails closed |
 | Trigger runtime | Implemented | Policy selection, quiet hours, delivery audit, and cooldown after display |
 | Skill / MCP / Evolve | Not installed | Reserved extension points; never claimed in the prompt |
 | TimeTrace compatibility | Implemented | Reads compatible activity data without making TimeTrace a runtime dependency |
@@ -50,7 +50,7 @@ Amadeus internalizes only TimeTrace's activity-awareness capability. The full St
 - OpenAI, DeepSeek, and custom OpenAI-compatible endpoints
 - Streaming chat with incomplete-response protection
 - Configurable proactive triggers, rate limits, adaptive quiet mode, and idle sleep
-- Built-in Windows/macOS frontmost-app and idle awareness with a local timeline
+- Built-in Windows/macOS/Linux X11 frontmost-app and idle awareness with a local timeline
 - Tray pause, app exclusions, configurable 1–168 hour retention, and range clearing
 - Local SQLite memory and privacy-filtered activity summaries
 - Local Cubism 2.1 model import with dependency validation
@@ -69,7 +69,7 @@ Windows keeps the legacy `%APPDATA%\timepet` directory. macOS uses `~/Library/Ap
 
 ## Build
 
-Use Flutter stable and Rust stable. Windows requires Visual Studio Desktop C++, macOS requires Xcode, and Ubuntu requires Flutter's Linux desktop dependencies, GTK 3, libsecret, and Ayatana AppIndicator.
+Use Flutter stable and Rust stable. Windows requires Visual Studio Desktop C++, macOS requires Xcode, and Ubuntu requires Flutter's Linux desktop dependencies, GTK 3, libsecret, X11/XScreenSaver, and Ayatana AppIndicator.
 
 ```bash
 flutter pub get
@@ -104,9 +104,9 @@ See [`tools/acceptance/README.md`](tools/acceptance/README.md) for reproducible 
 
 The control model is inspired by Computer History: visible state, tray pause, source exclusions, short-lived raw events, and a clearable timeline. Its data flow borrows Kafka's event-log and projection ideas without adding a Kafka runtime: the native layer captures the minimum signal, Rust classifies idle/self/excluded activity before persistence, SQLite `activity_events` holds the retention-bound append-only stream, and Flutter projects it into `usage_sessions`, seven-day rhythms, and compact conversational context.
 
-The implementation intentionally stays narrow. Every 10 seconds it asks the native layer only for the frontmost application identity and global idle duration; it does not request screen recording, window titles, document content, browser history, or keyboard content. Windows uses the foreground Win32 process and `GetLastInputInfo`; macOS uses `NSWorkspace.frontmostApplication` and `CGEventSource` idle time.
+The implementation intentionally stays narrow. Every 10 seconds it asks the native layer only for the frontmost application identity and global idle duration; it does not request screen recording, window titles, document content, browser history, or keyboard content. Windows uses the foreground Win32 process and `GetLastInputInfo`; macOS uses `NSWorkspace.frontmostApplication` and `CGEventSource` idle time; Linux X11 uses `_NET_ACTIVE_WINDOW` / `_NET_WM_PID`, `/proc/<pid>/comm`, and XScreenSaver while retaining only the process name.
 
-Ubuntu is deliberately labeled preview quality. Agent chat, settings, memory, trigger policy, tray, and local-data layers build and start. The current WebView stack has no Linux backend, so the avatar surface uses an original Flutter fallback; imported Live2D rendering and native Computer History capture are not yet available there.
+Ubuntu is deliberately labeled preview quality. Agent chat, settings, memory, trigger policy, tray, local-data layers, and native X11 activity awareness build and start. The current WebView stack has no Linux backend, so the avatar surface uses an original Flutter fallback and imported Live2D rendering is not yet available. Wayland has no uniform, non-invasive global foreground-app API, so the sensor reports unavailable and stops instead of falling back to screenshots, window-title scraping, or input monitoring.
 
 ## License
 

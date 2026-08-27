@@ -4,6 +4,7 @@ set -euo pipefail
 app_path="${1:?usage: smoke_linux.sh APP_PATH}"
 display_id="${AMADEUS_SMOKE_DISPLAY:-:98}"
 smoke_data="$(mktemp -d)"
+smoke_log="$smoke_data/amadeus.log"
 
 Xvfb "$display_id" -screen 0 1280x800x24 -nolisten tcp >/tmp/amadeus-smoke-xvfb.log 2>&1 &
 amadeus_xvfb_pid=$!
@@ -22,7 +23,12 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 2
-XDG_DATA_HOME="$smoke_data" "$app_path" &
+XDG_DATA_HOME="$smoke_data" "$app_path" >"$smoke_log" 2>&1 &
 amadeus_app_pid=$!
-sleep 8
+sleep 13
 kill -0 "$amadeus_app_pid"
+if ! grep -q "activity: Linux X11 sensor ready" "$smoke_log"; then
+  echo "Linux activity sensor did not report ready." >&2
+  cat "$smoke_log" >&2
+  exit 1
+fi

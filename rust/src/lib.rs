@@ -1,4 +1,4 @@
-//! Native activity semantics shared by the Windows and macOS runners.
+//! Native activity semantics shared by the Windows, macOS, and Linux runners.
 //!
 //! The OS layer observes the foreground application and idle duration. This
 //! crate applies the privacy boundary before an event can cross into Flutter:

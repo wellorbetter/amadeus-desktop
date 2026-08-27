@@ -38,7 +38,17 @@ class _AcceptanceDemoAppState extends State<AcceptanceDemoApp> {
       ..aiApiKey = 'acceptance-demo-only'
       ..activityAwarenessEnabled = true
       ..activityAwarenessPaused = false;
-    _history = ActivityHistory(pathOverride: '${_root.path}/activity.db');
+    _history = ActivityHistory(
+      pathOverride: '${_root.path}/activity.db',
+      provider: () async => ActivitySnapshot(
+        appName: 'Visual Studio Code',
+        appId: 'acceptance:code',
+        idleSeconds: 0,
+        capturedAt: DateTime.now(),
+        nativeDecision: ActivityDecision.active,
+        nativeCoreVersion: 1,
+      ),
+    );
     _seedHistory();
   }
 

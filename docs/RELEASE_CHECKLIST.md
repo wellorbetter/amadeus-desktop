@@ -38,9 +38,10 @@
 
 - [ ] 当前 Ubuntu LTS 在 X11 和 Wayland 会话中各完成一次首次启动、设置、托盘与退出流程
 - [ ] Agent 对话、记忆、触发设置和本地数据库读写正常
+- [ ] X11 能记录应用级活动与空闲片段，排除列表在 Rust 边界生效
+- [ ] Wayland 明确显示传感器不可用且保持 fail-closed，不采集窗口标题、截图或输入内容
 - [ ] 明确显示 Flutter 形象回退界面，不误称 Linux 已支持 Live2D WebView
-- [ ] 活动工作台明确提示 Linux 原生 Computer History 传感器尚不可用
-- [ ] `.tar.gz`/包管理器产物携带 GTK、libsecret 与 AppIndicator 运行依赖说明
+- [ ] `.tar.gz`/包管理器产物携带 GTK、libsecret、X11/XScreenSaver 与 AppIndicator 运行依赖说明
 
 ## 发布与回滚
 

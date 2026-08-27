@@ -47,16 +47,26 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
   void initState() {
     super.initState();
     _reload(notify: false);
+    unawaited(_probeSensor());
     _refreshTimer = Timer.periodic(
       ActivityHistory.pollInterval,
       (_) => _reload(),
     );
   }
 
+  Future<void> _probeSensor() async {
+    final activityHistory = widget.history ?? ActivityHistory.instance;
+    await activityHistory.capture();
+    if (mounted) _reload();
+  }
+
   @override
   void didUpdateWidget(covariant ActivityWorkspace oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.history != widget.history) _reload();
+    if (oldWidget.history != widget.history) {
+      _reload();
+      unawaited(_probeSensor());
+    }
   }
 
   @override
@@ -238,11 +248,25 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
 
   Widget _hero(BuildContext context, ActivityPulse? pulse) {
     final scheme = Theme.of(context).colorScheme;
+    final history = widget.history ?? ActivityHistory.instance;
     final running =
         config.activityAwarenessEnabled && !config.activityAwarenessPaused;
     final status = !config.activityAwarenessEnabled
         ? '观察能力已关闭'
-        : (config.activityAwarenessPaused ? '已暂停，记录保持不变' : '正在理解你的工作节奏');
+        : (config.activityAwarenessPaused
+              ? '已暂停，记录保持不变'
+              : switch (history.sensorStatus) {
+                  ActivitySensorStatus.unsupportedSession => '当前桌面会话不支持全局活动感知',
+                  ActivitySensorStatus.unavailable => '原生活动传感器暂不可用',
+                  _ => '正在理解你的工作节奏',
+                });
+    final sensorNote = switch (history.sensorStatus) {
+      ActivitySensorStatus.unsupportedSession =>
+        'Wayland 不提供统一的跨应用接口；已停止采集，且不会改用截图或输入监听',
+      ActivitySensorStatus.unavailable => history.sensorMessage ?? '请稍后重试',
+      ActivitySensorStatus.available => '原生传感器在线',
+      ActivitySensorStatus.unknown => '等待首个原生采样',
+    };
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(22),
@@ -280,13 +304,12 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
                   children: [
                     Text(
                       status,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: Theme.of(context).textTheme.titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Rust Core v1 · 本机事件流 · ${config.activityRetentionHours} 小时自动过期${_refreshText()}',
+                      'Rust Core v1 · $sensorNote · ${config.activityRetentionHours} 小时自动过期${_refreshText()}',
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   ],
@@ -435,9 +458,8 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
                   children: [
                     Text(
                       title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: Theme.of(context).textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
                     ),
                     if (subtitle != null) ...[
                       const SizedBox(height: 4),
@@ -674,9 +696,8 @@ class _PipelineView extends StatelessWidget {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.primary.withValues(alpha: 0.1),
+                  color: Theme.of(context).colorScheme.primary
+                      .withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(steps[index].$1, size: 18),
