@@ -12,6 +12,12 @@ windows/flutter/generated_plugin_registrant.cc
 windows/flutter/generated_plugin_registrant.h
 windows/flutter/generated_plugins.cmake
 
+# Linux runner generated
+linux/flutter/ephemeral/
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.h
+linux/flutter/generated_plugins.cmake
+
 # IDE
 .idea/
 *.iml

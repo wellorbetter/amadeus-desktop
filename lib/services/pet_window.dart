@@ -169,9 +169,7 @@ class PetWindow {
 
   static Future<String> _extractTrayIcon() async {
     final usePng = Platform.isMacOS || Platform.isLinux;
-    final asset = usePng
-        ? 'assets/tray/tray.png'
-        : 'assets/tray/tray.ico';
+    final asset = usePng ? 'assets/tray/tray.png' : 'assets/tray/tray.ico';
     final extension = usePng ? 'png' : 'ico';
     final data = await rootBundle.load(asset);
     final dir = Directory('${Directory.systemTemp.path}/amadeus');
