@@ -25,7 +25,9 @@ trap cleanup EXIT
 sleep 2
 XDG_DATA_HOME="$smoke_data" "$app_path" >"$smoke_log" 2>&1 &
 amadeus_app_pid=$!
-sleep 13
+# The first launch can spend several seconds waiting for an unavailable CI
+# secret service. Cover the next 10-second sensor poll before asserting ready.
+sleep 25
 kill -0 "$amadeus_app_pid"
 if ! grep -q "activity: Linux X11 sensor ready" "$smoke_log"; then
   echo "Linux activity sensor did not report ready." >&2

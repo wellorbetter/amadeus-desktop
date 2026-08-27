@@ -78,6 +78,8 @@ static void activity_method_call_cb(FlMethodChannel* channel,
     std::string error_code;
     std::string error_message;
     if (!amadeus::ReadActivitySample(&sample, &error_code, &error_message)) {
+      g_warning("activity: Linux sensor unavailable (%s): %s",
+                error_code.c_str(), error_message.c_str());
       response = FL_METHOD_RESPONSE(fl_method_error_response_new(
           error_code.c_str(), error_message.c_str(), nullptr));
     } else {
