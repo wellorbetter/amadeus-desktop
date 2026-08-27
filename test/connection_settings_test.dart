@@ -85,7 +85,10 @@ void main() {
     expect(find.text('7 天'), findsOneWidget);
     expect(find.text('30 天'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('activity-episode-1')));
+    final episode = find.byKey(const ValueKey('activity-episode-1'));
+    await tester.ensureVisible(episode);
+    await tester.pumpAndSettle();
+    await tester.tap(episode);
     await tester.pumpAndSettle();
     expect(find.text('活动片段详情'), findsOneWidget);
     expect(find.textContaining('没有窗口标题或输入内容'), findsOneWidget);
