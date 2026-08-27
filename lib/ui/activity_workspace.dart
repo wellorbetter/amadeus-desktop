@@ -196,11 +196,7 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
                     if (constraints.maxWidth < 560) {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          label,
-                          const SizedBox(height: 10),
-                          slider,
-                        ],
+                        children: [label, const SizedBox(height: 10), slider],
                       );
                     }
                     return Row(
@@ -423,9 +419,7 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outlineVariant,
-        ),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -459,11 +453,7 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
                 if (constraints.maxWidth < 470) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      heading,
-                      const SizedBox(height: 12),
-                      trailing,
-                    ],
+                    children: [heading, const SizedBox(height: 12), trailing],
                   );
                 }
                 return Row(
@@ -578,10 +568,7 @@ class _WeekBars extends StatelessWidget {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        final chartWidth = math.max(
-          constraints.maxWidth,
-          points.length * 38.0,
-        );
+        final chartWidth = math.max(constraints.maxWidth, points.length * 38.0);
         return SizedBox(
           height: 162,
           child: SingleChildScrollView(
@@ -747,34 +734,34 @@ class _EpisodeRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 11),
           child: Row(
             children: [
-          CircleAvatar(
-            radius: 17,
-            backgroundColor: scheme.primary.withValues(alpha: 0.1),
-            child: Text(
-              episode.appName.characters.first.toUpperCase(),
-              style: TextStyle(color: scheme.primary, fontSize: 12),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  episode.appName,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+              CircleAvatar(
+                radius: 17,
+                backgroundColor: scheme.primary.withValues(alpha: 0.1),
+                child: Text(
+                  episode.appName.characters.first.toUpperCase(),
+                  style: TextStyle(color: scheme.primary, fontSize: 12),
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  '$hour:$minute 开始',
-                  style: TextStyle(
-                    color: scheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      episode.appName,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '$hour:$minute 开始',
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
+              ),
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
