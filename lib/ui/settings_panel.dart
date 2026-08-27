@@ -57,11 +57,13 @@ class SettingsPage extends StatefulWidget {
     this.onClose,
     this.config,
     this.activityHistory,
+    this.demoCycleInterval,
   });
 
   final VoidCallback? onClose;
   final PetConfig? config;
   final ActivityHistory? activityHistory;
+  final Duration? demoCycleInterval;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -73,6 +75,7 @@ class _SettingsPageState extends State<SettingsPage> {
   _SettingsSection _section = _SettingsSection.overview;
   Timer? _commitTimer;
   Timer? _secretCommitTimer;
+  Timer? _demoTimer;
   bool _disposing = false;
   bool _apiKeyVisible = false;
   bool _navCollapsed = false;
@@ -91,6 +94,14 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _navCollapsed = cfg.settingsSidebarCollapsed;
     _syncControllers();
+    final demoCycleInterval = widget.demoCycleInterval;
+    if (demoCycleInterval != null) {
+      _demoTimer = Timer.periodic(demoCycleInterval, (_) {
+        if (!mounted) return;
+        final next = (_section.index + 1) % _SettingsSection.values.length;
+        setState(() => _section = _SettingsSection.values[next]);
+      });
+    }
   }
 
   void _syncControllers() {
@@ -109,6 +120,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _commitTimer?.cancel();
     final secretPending = _secretCommitTimer?.isActive ?? false;
     _secretCommitTimer?.cancel();
+    _demoTimer?.cancel();
     if (secretPending) {
       unawaited(PetSecretStore.instance.saveApiKey(cfg, cfg.aiApiKey));
     }

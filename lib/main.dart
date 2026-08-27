@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
@@ -10,8 +11,9 @@ import 'services/pet_logger.dart';
 import 'services/pet_secret_store.dart';
 import 'services/pet_window.dart';
 import 'ui/settings_window.dart';
+import 'ui/acceptance_demo.dart';
 
-void main() async {
+void main(List<String> args) async {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +21,15 @@ void main() async {
         PetLog.e('FlutterError: ${details.exception}\n${details.stack}');
       };
       PetLog.i('main: boot');
+
+      final acceptanceDemo =
+          args.contains('--acceptance-demo') ||
+          Platform.environment['AMADEUS_ACCEPTANCE_DEMO'] == '1';
+      if (acceptanceDemo) {
+        PetLog.i('main: isolated acceptance demo');
+        runApp(const AcceptanceDemoApp());
+        return;
+      }
 
       // 区分主窗口（桌宠）与独立设置窗口
       String windowId = '';

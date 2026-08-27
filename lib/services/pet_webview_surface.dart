@@ -17,6 +17,7 @@ class PetWebViewSurface {
     if (windows != null) return win.Webview(windows);
     final macOS = _macOS;
     if (macOS != null) return mac.WebViewWidget(controller: macOS);
+    if (Platform.isLinux) return const _LinuxAvatarFallback();
     return const SizedBox.expand();
   }
 
@@ -38,7 +39,14 @@ class PetWebViewSurface {
       await _initializeMacOS(initialUrl);
       return;
     }
-    throw UnsupportedError('Amadeus currently supports Windows and macOS');
+    if (Platform.isLinux) {
+      // Linux does not yet have an embedded Live2D WebView backend. Keep the
+      // Agent usable with an explicit original fallback instead of failing at
+      // startup or pretending that the imported model is being rendered.
+      onNavigationCompleted();
+      return;
+    }
+    throw UnsupportedError('Unsupported desktop platform');
   }
 
   Future<void> _initializeWindows(String initialUrl) async {
@@ -100,5 +108,64 @@ class PetWebViewSurface {
     _windows?.dispose();
     _windows = null;
     _macOS = null;
+  }
+}
+
+class _LinuxAvatarFallback extends StatelessWidget {
+  const _LinuxAvatarFallback();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Container(
+        width: 176,
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: scheme.outlineVariant),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.14),
+              blurRadius: 26,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 74,
+              height: 74,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [scheme.primary, scheme.secondary],
+                ),
+              ),
+              child: const Icon(
+                Icons.graphic_eq_rounded,
+                color: Colors.white,
+                size: 38,
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Amadeus',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 17),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              'Linux Agent 预览',
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
