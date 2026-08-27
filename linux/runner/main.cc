@@ -17,6 +17,7 @@ int RunActivitySensorSmoke(char* executable_name) {
   gtk_window_set_title(GTK_WINDOW(window), "Amadeus activity sensor smoke");
   gtk_window_set_default_size(GTK_WINDOW(window), 320, 180);
   gtk_widget_show_all(window);
+  gtk_window_present(GTK_WINDOW(window));
 
   std::string error_code = "foreground_unavailable";
   std::string error_message = "No active X11 window was observed.";

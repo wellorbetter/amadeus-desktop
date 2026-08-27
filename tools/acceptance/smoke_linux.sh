@@ -10,6 +10,17 @@ sensor_log="$smoke_data/activity-sensor.log"
 Xvfb "$display_id" -screen 0 1280x800x24 -nolisten tcp >/tmp/amadeus-smoke-xvfb.log 2>&1 &
 amadeus_xvfb_pid=$!
 export DISPLAY="$display_id"
+display_number="${display_id#:}"
+display_number="${display_number%%.*}"
+for _ in {1..50}; do
+  [[ -S "/tmp/.X11-unix/X$display_number" ]] && break
+  sleep 0.1
+done
+if [[ ! -S "/tmp/.X11-unix/X$display_number" ]]; then
+  cat /tmp/amadeus-smoke-xvfb.log >&2
+  kill "$amadeus_xvfb_pid" 2>/dev/null || true
+  exit 1
+fi
 openbox >/tmp/amadeus-smoke-openbox.log 2>&1 &
 amadeus_openbox_pid=$!
 
@@ -24,7 +35,14 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 2
-"$app_path" --activity-sensor-smoke >"$sensor_log" 2>&1
+if ! kill -0 "$amadeus_openbox_pid" 2>/dev/null; then
+  cat /tmp/amadeus-smoke-openbox.log >&2
+  exit 1
+fi
+if ! "$app_path" --activity-sensor-smoke >"$sensor_log" 2>&1; then
+  cat "$sensor_log" >&2
+  exit 1
+fi
 if ! grep -q "activity: Linux X11 sensor ready" "$sensor_log"; then
   echo "Linux activity sensor did not report ready." >&2
   cat "$sensor_log" >&2

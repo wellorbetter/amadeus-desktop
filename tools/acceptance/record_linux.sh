@@ -9,6 +9,17 @@ mkdir -p "$(dirname "$output_path")"
 Xvfb "$display_id" -screen 0 1280x800x24 -nolisten tcp >/tmp/amadeus-xvfb.log 2>&1 &
 amadeus_xvfb_pid=$!
 export DISPLAY="$display_id"
+display_number="${display_id#:}"
+display_number="${display_number%%.*}"
+for _ in {1..50}; do
+  [[ -S "/tmp/.X11-unix/X$display_number" ]] && break
+  sleep 0.1
+done
+if [[ ! -S "/tmp/.X11-unix/X$display_number" ]]; then
+  cat /tmp/amadeus-xvfb.log >&2
+  kill "$amadeus_xvfb_pid" 2>/dev/null || true
+  exit 1
+fi
 openbox >/tmp/amadeus-openbox.log 2>&1 &
 amadeus_openbox_pid=$!
 
@@ -22,6 +33,10 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 2
+if ! kill -0 "$amadeus_openbox_pid" 2>/dev/null; then
+  cat /tmp/amadeus-openbox.log >&2
+  exit 1
+fi
 AMADEUS_ACCEPTANCE_DEMO=1 "$app_path" --acceptance-demo &
 amadeus_app_pid=$!
 # Cold CI runners may keep the GTK window alive before it is first mapped.
