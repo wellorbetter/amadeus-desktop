@@ -24,7 +24,9 @@ trap cleanup EXIT
 sleep 2
 AMADEUS_ACCEPTANCE_DEMO=1 "$app_path" --acceptance-demo &
 amadeus_app_pid=$!
-sleep 4
+# Cold CI runners may keep the GTK window alive before it is first mapped.
+# Give it enough time to paint so the artifact starts on product UI, not black.
+sleep 7
 kill -0 "$amadeus_app_pid"
 
 ffmpeg -y -loglevel warning -f x11grab -framerate 15 \
