@@ -385,11 +385,7 @@ class _PetHomeState extends State<PetHome> {
     return AgentContextComposer(
       memory: PetMemory.instance,
       observation: _tt,
-    ).compose(
-      persona: persona,
-      query: query,
-      customPersona: soul.hasSoul,
-    );
+    ).compose(persona: persona, query: query, customPersona: soul.hasSoul);
   }
 
   Future<void> _greet() async {

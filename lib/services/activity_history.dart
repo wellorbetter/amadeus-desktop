@@ -149,6 +149,8 @@ class ActivityHistory {
   bool _currentIdle = false;
   int _currentIdleSeconds = 0;
   bool _currentlyIdle = false;
+  bool _hasCurrentSnapshot = false;
+  String _currentForegroundApp = '-';
   int? _observedTimelineRevision;
   DateTime? _lastPurgeAt;
 
@@ -156,6 +158,8 @@ class ActivityHistory {
   bool get initialized => _db != null;
   int get currentIdleSeconds => _currentIdleSeconds;
   bool get currentlyIdle => _currentlyIdle;
+  bool get hasCurrentSnapshot => _hasCurrentSnapshot;
+  String get currentForegroundApp => _currentForegroundApp;
 
   Database get _database {
     final value = _db;
@@ -173,8 +177,14 @@ class ActivityHistory {
       _db = null;
       if (error is _NewerActivitySchema) return;
       final backup = _backupBrokenDatabase();
-      _openAndMigrate();
-      PetLog.i('activity: recovered with fresh database backup=$backup');
+      try {
+        _openAndMigrate();
+        PetLog.i('activity: recovered with fresh database backup=$backup');
+      } catch (recoveryError) {
+        PetLog.e('activity: recovery failed: $recoveryError');
+        _db?.close();
+        _db = null;
+      }
     }
   }
 
@@ -256,12 +266,17 @@ class ActivityHistory {
     if (!source.existsSync()) return null;
     final stamp = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
     final backupPath = '$path.corrupt-$stamp';
-    source.renameSync(backupPath);
-    for (final suffix in const ['-wal', '-shm']) {
-      final sidecar = File('$path$suffix');
-      if (sidecar.existsSync()) sidecar.renameSync('$backupPath$suffix');
+    try {
+      source.renameSync(backupPath);
+      for (final suffix in const ['-wal', '-shm']) {
+        final sidecar = File('$path$suffix');
+        if (sidecar.existsSync()) sidecar.renameSync('$backupPath$suffix');
+      }
+      return backupPath;
+    } catch (error) {
+      PetLog.e('activity: failed to preserve corrupt database: $error');
+      return null;
     }
-    return backupPath;
   }
 
   void start() {
@@ -284,6 +299,8 @@ class ActivityHistory {
       _finishCurrent(DateTime.now());
       _currentIdleSeconds = 0;
       _currentlyIdle = false;
+      _hasCurrentSnapshot = false;
+      _currentForegroundApp = '-';
       return;
     }
     if (_capturing) return;
@@ -327,6 +344,7 @@ class ActivityHistory {
     init();
     _syncTimelineRevision();
     final cfg = PetConfig.instance;
+    _hasCurrentSnapshot = true;
     _currentIdleSeconds = snapshot.idleSeconds.clamp(0, 1 << 31).toInt();
     _currentlyIdle = _currentIdleSeconds >= cfg.activityIdleSeconds;
     final normalized = snapshot.appName.toLowerCase();
@@ -347,6 +365,7 @@ class ActivityHistory {
         ? snapshot.nativeDecision
         : null;
     if (excluded || self || decision == ActivityDecision.excluded) {
+      _currentForegroundApp = '-';
       _finishCurrent(snapshot.capturedAt);
       return;
     }
@@ -355,6 +374,7 @@ class ActivityHistory {
         decision == ActivityDecision.idle ||
         (decision == null && snapshot.idleSeconds >= cfg.activityIdleSeconds);
     final appName = idle ? '空闲' : snapshot.appName;
+    _currentForegroundApp = appName;
     final key = idle ? '__idle__' : '${snapshot.appId}|$normalized';
     _appendEvent(snapshot, appName, idle);
     _rollCurrentAcrossMidnight(snapshot.capturedAt);
@@ -448,7 +468,8 @@ class ActivityHistory {
       if (!_updateCurrent(boundary)) return;
       final appId = _currentAppId ?? '';
       final appName = _currentAppName ?? (_currentIdle ? '空闲' : '未知应用');
-      final key = _currentKey ?? (_currentIdle ? '__idle__' : '$appId|$appName');
+      final key =
+          _currentKey ?? (_currentIdle ? '__idle__' : '$appId|$appName');
       final idle = _currentIdle;
       _resetCurrent();
       _startSession(
@@ -620,7 +641,9 @@ class ActivityHistory {
           ..execute('DELETE FROM activity_events WHERE captured_at >= ?', [
             cutoff,
           ])
-          ..execute('DELETE FROM usage_sessions WHERE started_at >= ?', [cutoff]);
+          ..execute('DELETE FROM usage_sessions WHERE started_at >= ?', [
+            cutoff,
+          ]);
       }
       _bumpTimelineRevision();
       _database.execute('COMMIT');
@@ -671,6 +694,10 @@ class ActivityHistory {
     stop();
     _db?.close();
     _db = null;
+    _hasCurrentSnapshot = false;
+    _currentIdleSeconds = 0;
+    _currentlyIdle = false;
+    _currentForegroundApp = '-';
   }
 
   String _dateKey(DateTime value) =>

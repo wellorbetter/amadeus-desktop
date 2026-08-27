@@ -23,6 +23,29 @@ void main() {
     );
   });
 
+  test('newer activity schema is never overwritten during downgrade', () {
+    final root = Directory.systemTemp.createTempSync('amadeus-activity-test-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final path = '${root.path}/activity.db';
+    final future = sqlite3.open(path)
+      ..userVersion = ActivityHistory.schemaVersion + 10;
+    future.close();
+
+    final history = ActivityHistory(pathOverride: path)..init();
+    addTearDown(history.close);
+
+    expect(history.initialized, isFalse);
+    final unchanged = sqlite3.open(path);
+    addTearDown(unchanged.close);
+    expect(unchanged.userVersion, ActivityHistory.schemaVersion + 10);
+    expect(
+      root.listSync().whereType<File>().where(
+        (file) => file.path.contains('.corrupt-'),
+      ),
+      isEmpty,
+    );
+  });
+
   late Directory root;
   late ActivityHistory history;
 
@@ -114,6 +137,8 @@ void main() {
     );
     expect(history.currentlyIdle, isTrue);
     expect(history.currentIdleSeconds, 900);
+    expect(history.hasCurrentSnapshot, isTrue);
+    expect(history.currentForegroundApp, '空闲');
 
     history.recordSnapshot(
       ActivitySnapshot(
@@ -125,6 +150,7 @@ void main() {
     );
     expect(history.currentlyIdle, isFalse);
     expect(history.currentIdleSeconds, 0);
+    expect(history.currentForegroundApp, 'Editor');
   });
 
   test('excluded apps and idle sessions do not appear in the timeline', () {
@@ -296,35 +322,38 @@ void main() {
     expect(rows.single['duration_secs'], 3600);
   });
 
-  test('writer recreates its current session after another engine clears it', () {
-    final clearer = ActivityHistory(pathOverride: history.path)..init();
-    addTearDown(clearer.close);
-    final now = DateTime.now();
-    history.recordSnapshot(
-      ActivitySnapshot(
-        appName: 'Editor',
-        appId: 'editor.app',
-        idleSeconds: 0,
-        capturedAt: now,
-      ),
-    );
+  test(
+    'writer recreates its current session after another engine clears it',
+    () {
+      final clearer = ActivityHistory(pathOverride: history.path)..init();
+      addTearDown(clearer.close);
+      final now = DateTime.now();
+      history.recordSnapshot(
+        ActivitySnapshot(
+          appName: 'Editor',
+          appId: 'editor.app',
+          idleSeconds: 0,
+          capturedAt: now,
+        ),
+      );
 
-    clearer.clearSince(null);
-    history.recordSnapshot(
-      ActivitySnapshot(
-        appName: 'Editor',
-        appId: 'editor.app',
-        idleSeconds: 0,
-        capturedAt: now.add(const Duration(seconds: 10)),
-      ),
-    );
+      clearer.clearSince(null);
+      history.recordSnapshot(
+        ActivitySnapshot(
+          appName: 'Editor',
+          appId: 'editor.app',
+          idleSeconds: 0,
+          capturedAt: now.add(const Duration(seconds: 10)),
+        ),
+      );
 
-    expect(history.eventCount(), 1);
-    final database = sqlite3.open(history.path, mode: OpenMode.readOnly);
-    addTearDown(database.close);
-    expect(
-      database.select('SELECT COUNT(*) AS n FROM usage_sessions').first['n'],
-      1,
-    );
-  });
+      expect(history.eventCount(), 1);
+      final database = sqlite3.open(history.path, mode: OpenMode.readOnly);
+      addTearDown(database.close);
+      expect(
+        database.select('SELECT COUNT(*) AS n FROM usage_sessions').first['n'],
+        1,
+      );
+    },
+  );
 }

@@ -32,8 +32,9 @@ void main() {
     final config = PetConfig(pathOverride: '${dir.path}/config.json');
     await tester.pumpWidget(MaterialApp(home: SettingsPage(config: config)));
 
-    expect(find.text('Amadeus 桌面端'), findsOneWidget);
-    expect(find.text('内置活动感知'), findsOneWidget);
+    expect(find.text('Agent Runtime'), findsOneWidget);
+    expect(find.text('Computer History'), findsOneWidget);
+    expect(find.text('Skill · MCP · Evolve'), findsOneWidget);
     await tester.tap(find.text('记忆与隐私'));
     await tester.pumpAndSettle();
     expect(find.text('数据边界'), findsOneWidget);

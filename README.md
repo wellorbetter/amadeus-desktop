@@ -71,7 +71,7 @@ Live2D 模型与 `soul.md` 分离：更换形象不会偷偷改写人格，修�
 | 窗口标题、截图、音频、键盘输入、文件路径 | 不采集 | 否 |
 | 前台应用、空闲时长原始事件 | 本机独立数据库，默认 48 小时 | 否 |
 | 用户消息、必要的近期对话 | 本机 + 本次请求 | 是 |
-| 隐私过滤后的活动聚合摘要 | 短期上下文 | 仅启用观察能力且本次相关时 |
+| 隐私过滤后的活动聚合摘要 | 短期上下文 | 启用观察能力且有可用数据时 |
 | 经审核的长期记忆 | 本地 SQLite | 仅在相关对话召回时 |
 
 Windows 延续旧版目录：`%APPDATA%\timepet`。macOS 使用 `~/Library/Application Support/Amadeus`。
@@ -147,7 +147,7 @@ GitHub Actions 会分别在 Windows 和 macOS runner 上生成构建产物。CI 
 | `lib/services/activity_history.dart` | 内置活动采集、短期 SQLite 时间线与清除策略 |
 | `rust/` | 跨端隐私分类与专注指标核心，通过稳定 C ABI 接入 Flutter runner |
 | `lib/services/tt_api.dart` | 活动聚合与旧 TimeTrace 兼容适配 |
-| `lib/services/pet_memory.dart` | 记忆筛选、召回与画像 |
+| `lib/services/pet_memory.dart` | 工作记忆筛选与经审核的语义记忆召回 |
 | `lib/services/trigger_engine.dart` | 主动性与打扰控制 |
 | `lib/ui/` | 引导、设置、气泡与输入 |
 | `assets/web/` | 跨平台 Live2D Web 渲染层 |

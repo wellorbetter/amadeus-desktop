@@ -62,7 +62,7 @@ Amadeus internalizes only TimeTrace's activity-awareness capability. Diary, Proj
 
 Amadeus never bundles or downloads third-party character models or personas. The public build ships with an original Amadeus persona. Users must confirm that they have the right to use imported assets; local personal use does not automatically grant redistribution or commercial rights.
 
-Amadeus does not collect screenshots, audio, window titles, file paths, browser history, or typed content. Frontmost-app and idle events remain in a separate local database for 48 hours by default. Online requests contain the user's message, necessary conversation context, and — only when relevant and enabled — a compact, privacy-filtered activity aggregate.
+Amadeus does not collect screenshots, audio, window titles, file paths, browser history, or typed content. Frontmost-app and idle events remain in a separate local database for 48 hours by default. When observation is enabled and data is available, online requests include a compact, privacy-filtered activity aggregate; the model is instructed to use it only when naturally relevant.
 
 Windows keeps the legacy `%APPDATA%\timepet` directory. macOS uses `~/Library/Application Support/Amadeus`.
 

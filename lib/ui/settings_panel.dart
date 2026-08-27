@@ -524,7 +524,8 @@ class _SettingsPageState extends State<SettingsPage> {
               _ArchitectureRow(
                 icon: Icons.history_toggle_off_rounded,
                 title: 'TimeTrace 兼容边界',
-                body: '只读取旧活动数据；Diary、Project / Session 与 AI Recap 仍属于 TimeTrace',
+                body:
+                    '只读取旧活动数据；Diary、Project / Session 与 AI Recap 仍属于 TimeTrace',
                 badge: '独立产品',
               ),
             ],
@@ -1103,7 +1104,9 @@ class _SettingsPageState extends State<SettingsPage> {
                         ? Icons.bolt_rounded
                         : Icons.error_outline_rounded,
                     size: 18,
-                    color: delivered ? null : Theme.of(context).colorScheme.error,
+                    color: delivered
+                        ? null
+                        : Theme.of(context).colorScheme.error,
                   ),
                   title: Text('${events[index]['label']}'),
                   subtitle: Text(

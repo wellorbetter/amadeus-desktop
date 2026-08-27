@@ -16,10 +16,7 @@ abstract interface class AgentMemorySource {
 /// - memory contains user-controlled conversation and semantic memory;
 /// - lived context is an ephemeral observation and is never promoted here.
 class AgentContextComposer {
-  const AgentContextComposer({
-    required this.memory,
-    required this.observation,
-  });
+  const AgentContextComposer({required this.memory, required this.observation});
 
   final AgentMemorySource memory;
   final ObservationSource observation;
@@ -30,8 +27,7 @@ class AgentContextComposer {
       '长期记忆只来自用户对话中经审核的信息。不要把一次观察冒充成永久记忆，'
       '也不要声称拥有尚未安装的 Skill、MCP 或 Evolve 能力。';
 
-  static const privacyBoundary =
-      '隐私红线：不要输出文件路径、截图、窗口标题、输入内容、密钥或未经授权的原始事件。';
+  static const privacyBoundary = '隐私红线：不要输出文件路径、截图、窗口标题、输入内容、密钥或未经授权的原始事件。';
 
   String compose({
     required String persona,

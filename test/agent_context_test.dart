@@ -4,7 +4,8 @@ import 'package:timepet/services/observation_source.dart';
 
 class _Memory implements AgentMemorySource {
   @override
-  String relevantSummary(String query) => query.contains('项目') ? '用户目标：完成项目' : '';
+  String relevantSummary(String query) =>
+      query.contains('项目') ? '用户目标：完成项目' : '';
 
   @override
   String workingSummary() => '用户：继续优化';

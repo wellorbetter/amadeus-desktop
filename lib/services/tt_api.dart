@@ -167,6 +167,7 @@ class TtApi implements ObservationSource {
     _currentlyIdle = ActivityHistory.instance.currentlyIdle;
     final currentIdleSeconds = _currentIdleSeconds;
     final currentlyIdle = _currentlyIdle;
+    final currentForeground = ActivityHistory.instance.currentForegroundApp;
 
     // The built-in short-lived activity database is now the primary source.
     // Legacy TimeTrace files remain later candidates for seamless migration.
@@ -179,6 +180,9 @@ class TtApi implements ObservationSource {
     // idle reading is still valid and must survive the legacy HTTP fallback.
     _currentIdleSeconds = currentIdleSeconds;
     _currentlyIdle = currentlyIdle;
+    _foreground = currentForeground;
+    _nowHour = DateTime.now().hour.toString();
+    if (ActivityHistory.instance.hasCurrentSnapshot) _lastActive = '刚刚';
 
     var ok = false;
     try {
@@ -226,6 +230,9 @@ class TtApi implements ObservationSource {
       ok = ok || hasHistory;
     }
 
+    // A native snapshot is already useful for current idle/return detection,
+    // even before its first usage session accumulates a positive duration.
+    ok = ok || ActivityHistory.instance.hasCurrentSnapshot;
     if (ok) _lastSync = DateTime.now();
     return ok;
   }
