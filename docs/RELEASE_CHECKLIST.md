@@ -11,7 +11,7 @@
 - [ ] Windows x64 release 构建并上传 artifact
 - [ ] macOS release 构建并上传未签名 `.app` artifact
 - [ ] Ubuntu release 构建、完整入口 smoke、隔离验收游览录屏并上传 artifact
-- [ ] Windows 完整入口 smoke 通过；Windows/macOS 平台语义 UI 模拟视频均生成
+- [ ] Windows 完整入口 smoke 与原生录屏通过；macOS 平台语义 UI 模拟视频生成
 - [ ] macOS GUI 进程 smoke 与托管 runner 原生录屏作为尽力项单独报告，不冒充真机验收
 
 ## Windows 真机

@@ -31,9 +31,7 @@ jobs:
       - name: Lint Rust activity core
         run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
       - name: Verify formatting
-        run: |
-          dart format lib test
-          git diff -- lib test
+        run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
       - run: flutter test
 
@@ -57,15 +55,7 @@ jobs:
       - name: Install FFmpeg for Windows acceptance video
         shell: pwsh
         run: choco install ffmpeg -y --no-progress
-      - name: Render Windows UI simulation frames
-        shell: pwsh
-        run: |
-          $env:AMADEUS_ACCEPTANCE_FRAMES_DIR = "build/acceptance/windows-frames"
-          $env:AMADEUS_ACCEPTANCE_PLATFORM = "windows"
-          flutter test test/acceptance_capture_test.dart
-          ./tools/acceptance/frames_to_video.ps1 -FramesPath build/acceptance/windows-frames -OutputPath build/acceptance/amadeus-windows-simulation.mp4
       - name: Record Windows release acceptance tour
-        continue-on-error: true
         shell: pwsh
         run: ./tools/acceptance/record_windows.ps1 -AppPath build/windows/x64/runner/Release/timepet.exe -OutputPath build/acceptance/amadeus-windows.mp4
       - uses: actions/upload-artifact@v4
@@ -73,18 +63,11 @@ jobs:
           name: amadeus-windows
           path: build/windows/x64/runner/Release/
           if-no-files-found: error
-      - name: Upload Windows acceptance video when desktop capture is available
-        if: always()
+      - name: Upload Windows acceptance video
         uses: actions/upload-artifact@v4
         with:
           name: amadeus-windows-acceptance-video
           path: build/acceptance/amadeus-windows.mp4
-          if-no-files-found: warn
-      - name: Upload Windows UI simulation video
-        uses: actions/upload-artifact@v4
-        with:
-          name: amadeus-windows-ui-simulation-video
-          path: build/acceptance/amadeus-windows-simulation.mp4
           if-no-files-found: error
 
   macos:
@@ -108,9 +91,12 @@ jobs:
         run: brew install ffmpeg
       - name: Render macOS UI simulation frames
         run: |
-          AMADEUS_ACCEPTANCE_FRAMES_DIR=build/acceptance/macos-frames \
-          AMADEUS_ACCEPTANCE_PLATFORM=macos \
-          flutter test test/acceptance_capture_test.dart
+          for index in 0 1 2 3 4 5 6; do
+            AMADEUS_ACCEPTANCE_FRAMES_DIR=build/acceptance/macos-frames \
+            AMADEUS_ACCEPTANCE_PLATFORM=macos \
+            AMADEUS_ACCEPTANCE_FRAME_INDEX="$index" \
+            flutter test --timeout 2m test/acceptance_capture_test.dart
+          done
           ./tools/acceptance/frames_to_video.sh build/acceptance/macos-frames build/acceptance/amadeus-macos-simulation.mp4
       - name: Attempt macOS acceptance recording
         continue-on-error: true
