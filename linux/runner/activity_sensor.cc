@@ -38,6 +38,53 @@ bool ReadWindowProperty(Display* display,
   return true;
 }
 
+bool ReadActiveWindow(Display* display, Window root, Window* active_window) {
+  if (active_window == nullptr) return false;
+  const Atom active_window_atom =
+      XInternAtom(display, "_NET_ACTIVE_WINDOW", True);
+  unsigned long active_window_value = 0;
+  if (ReadWindowProperty(display, root, active_window_atom, XA_WINDOW,
+                         &active_window_value) &&
+      active_window_value != None) {
+    *active_window = static_cast<Window>(active_window_value);
+    return true;
+  }
+
+  Window focused_window = None;
+  int revert_to = RevertToNone;
+  XGetInputFocus(display, &focused_window, &revert_to);
+  if (focused_window == None || focused_window == PointerRoot) return false;
+  *active_window = focused_window;
+  return true;
+}
+
+bool ReadWindowPid(Display* display,
+                   Window root,
+                   Window active_window,
+                   unsigned long* pid) {
+  const Atom pid_atom = XInternAtom(display, "_NET_WM_PID", True);
+  Window candidate = active_window;
+  for (int depth = 0; depth < 16 && candidate != None; ++depth) {
+    if (ReadWindowProperty(display, candidate, pid_atom, XA_CARDINAL, pid)) {
+      return true;
+    }
+    if (candidate == root) break;
+
+    Window returned_root = None;
+    Window parent = None;
+    Window* children = nullptr;
+    unsigned int child_count = 0;
+    if (XQueryTree(display, candidate, &returned_root, &parent, &children,
+                   &child_count) == 0) {
+      if (children != nullptr) XFree(children);
+      break;
+    }
+    if (children != nullptr) XFree(children);
+    candidate = parent;
+  }
+  return false;
+}
+
 bool IsSafeProcessName(const std::string& value) {
   if (value.empty() || !g_utf8_validate(value.c_str(), -1, nullptr)) {
     return false;
@@ -110,21 +157,15 @@ bool ReadActivitySample(ActivitySample* sample,
 
   Display* display = gdk_x11_display_get_xdisplay(gdk_display);
   const Window root = DefaultRootWindow(display);
-  const Atom active_window_atom =
-      XInternAtom(display, "_NET_ACTIVE_WINDOW", True);
-  unsigned long active_window_value = 0;
-  if (!ReadWindowProperty(display, root, active_window_atom, XA_WINDOW,
-                          &active_window_value) ||
-      active_window_value == None) {
+  Window active_window = None;
+  if (!ReadActiveWindow(display, root, &active_window)) {
     SetError(error_code, error_message, "foreground_unavailable",
-             "The X11 window manager did not expose an active window.");
+             "X11 did not expose an active or focused window.");
     return false;
   }
 
-  const Atom pid_atom = XInternAtom(display, "_NET_WM_PID", True);
   unsigned long pid = 0;
-  if (!ReadWindowProperty(display, static_cast<Window>(active_window_value),
-                          pid_atom, XA_CARDINAL, &pid) ||
+  if (!ReadWindowPid(display, root, active_window, &pid) ||
       !ReadProcessName(pid, &sample->app_name)) {
     SetError(error_code, error_message, "process_unavailable",
              "The active X11 process identity could not be read.");

@@ -163,7 +163,7 @@ GitHub Actions 会在原生 Windows、macOS 和 Ubuntu runner 上完成 Release 
 
 这一层参考了 Computer History 的可控性设计：明确开启状态、托盘暂停、数据源排除、短期原始记录和可清除时间线。数据流借鉴 Kafka 的事件日志与投影思想，但不引入 Kafka 运行时：原生层采集最小信号，Rust 在写入前做空闲、自身进程与排除项分类，SQLite `activity_events` 保存可按保留期清除的追加事件，Flutter 再把它投影为 `usage_sessions`、七日节律与对话所需的聚合上下文。
 
-当前实现刻意保持窄能力面：每 10 秒只向原生层询问前台应用标识与全局空闲秒数，不请求屏幕录制，也不读取窗口标题、文档内容、浏览历史或按键内容。Windows 使用 Win32 前台进程与 `GetLastInputInfo`；macOS 使用 `NSWorkspace.frontmostApplication` 与 `CGEventSource` 空闲时间；Linux X11 使用 `_NET_ACTIVE_WINDOW` / `_NET_WM_PID`、`/proc/<pid>/comm` 与 XScreenSaver，只保留进程名，不读取窗口标题或可执行路径。
+当前实现刻意保持窄能力面：每 10 秒只向原生层询问前台应用标识与全局空闲秒数，不请求屏幕录制，也不读取窗口标题、文档内容、浏览历史或按键内容。Windows 使用 Win32 前台进程与 `GetLastInputInfo`；macOS 使用 `NSWorkspace.frontmostApplication` 与 `CGEventSource` 空闲时间；Linux X11 优先使用 `_NET_ACTIVE_WINDOW`，并兼容 X input focus，再通过 `_NET_WM_PID`、`/proc/<pid>/comm` 与 XScreenSaver 获取最小信号，只保留进程名，不读取窗口标题或可执行路径。
 
 Ubuntu 当前仍是预览层级：Agent 对话、设置、记忆、触发策略、托盘、本地数据层以及 X11 原生活动感知可以构建和启动；由于项目现用 WebView 方案没有 Linux 后端，形象区域显示原创 Flutter 回退界面，Live2D 导入渲染暂不可用。Wayland 没有统一、非侵入式的全局前台应用接口，因此传感器会明确显示不可用并停止采集，不会退化为截图、窗口标题抓取或输入监听。
 

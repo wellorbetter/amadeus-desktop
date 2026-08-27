@@ -18,6 +18,8 @@ int RunActivitySensorSmoke(char* executable_name) {
   gtk_window_set_default_size(GTK_WINDOW(window), 320, 180);
   gtk_widget_show_all(window);
   gtk_window_present(GTK_WINDOW(window));
+  GdkWindow* gdk_window = gtk_widget_get_window(window);
+  if (gdk_window != nullptr) gdk_window_focus(gdk_window, GDK_CURRENT_TIME);
 
   std::string error_code = "foreground_unavailable";
   std::string error_message = "No active X11 window was observed.";
