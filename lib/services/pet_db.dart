@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'pet_logger.dart';
 import 'tt_api.dart';
+import 'app_paths.dart';
 
 /// 单日事实（结构化，供画像/召回使用）。
 class DailyFact {
@@ -61,9 +62,7 @@ class PetDb {
   }
 
   String get path {
-    final appData =
-        Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
-    return '$appData/timepet/mem.db';
+    return AppPaths.memoryFile.path;
   }
 
   void init() {
@@ -127,9 +126,9 @@ class PetDb {
   void _migrateFromMemJson() {
     try {
       if (getKv('memjson_migrated') == '1') return;
-      final appData =
-          Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
-      final f = File('$appData/timepet/mem.json');
+      final f = File(
+        '${AppPaths.userDataDirectory.path}${Platform.pathSeparator}mem.json',
+      );
       if (f.existsSync()) {
         final json = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
         final entries = json['entries'] as List? ?? const [];
@@ -313,11 +312,14 @@ class PetDb {
   List<Map<String, Object?>> recentMemoryRows({int limit = 8}) {
     if (_db == null) return const [];
     try {
-      return db.select(
-        'SELECT id, content, category, importance, ts, source FROM memories '
-        'WHERE active = 1 ORDER BY id DESC LIMIT ?',
-        [limit],
-      ).map((row) => Map<String, Object?>.from(row)).toList();
+      return db
+          .select(
+            'SELECT id, content, category, importance, ts, source FROM memories '
+            'WHERE active = 1 ORDER BY id DESC LIMIT ?',
+            [limit],
+          )
+          .map((row) => Map<String, Object?>.from(row))
+          .toList();
     } catch (e) {
       PetLog.e('db: recent memories error: $e');
       return const [];

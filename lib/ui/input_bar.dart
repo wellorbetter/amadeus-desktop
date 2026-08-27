@@ -58,7 +58,7 @@ class _PetInputBarState extends State<PetInputBar> {
               enabled: widget.enabled && !_busy,
               style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: const InputDecoration(
-                hintText: '和牧濑红莉栖说点什么…',
+                hintText: '和 Amadeus 说点什么…',
                 hintStyle: TextStyle(color: Color(0x8899A3C7), fontSize: 13),
                 border: InputBorder.none,
                 isDense: true,

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-TimePet 模型导入工具（教程 agent 核心）
-========================================
+Amadeus 模型导入工具
+====================
 子命令：
   import  <模型文件夹或model.json路径>  导入模型（默认子命令，可省略 import）
   list                                 列出已安装模型（含音效数量/当前激活）
@@ -10,16 +10,16 @@ TimePet 模型导入工具（教程 agent 核心）
   check  <模型文件夹或json路径>         只校验不复制（资源完整性 + 音效）
 
 用法示例：
-  python tools/import_model.py import D:\\models\\shizuku
-  python tools/import_model.py import D:\\models\\shizuku --set-config
-  python tools/import_model.py D:\\models\\shizuku            # import 可省略
+  python tools/import_model.py import D:\\models\\my-avatar
+  python tools/import_model.py import D:\\models\\my-avatar --set-config
+  python tools/import_model.py D:\\models\\my-avatar            # import 可省略
   python tools/import_model.py list
-  python tools/import_model.py switch shizuku
+  python tools/import_model.py switch my-avatar
   python tools/import_model.py status
 
 说明：
   - 模型文件不入库、不入安装包，请使用合规模型（版权自行确认）。
-  - 音效来自模型自身动作定义（motions 里的 sound 引用，如 kurisu 的 sounds/*.mp3）；
+  - 音效来自模型自身动作定义（motions 里的 sound 引用）；
     没有音效文件的模型保持无声，这是模型决定的，不是程序问题。
 """
 import argparse
@@ -121,14 +121,23 @@ def resolve_refs(model_dir, cfg, kind):
     return missing, total, sounds
 
 
-def appdata_timepet_dir():
-    base = os.environ.get("APPDATA") or os.path.join(
-        os.path.expanduser("~"), "AppData", "Roaming")
-    return os.path.join(base, "timepet")
+def amadeus_data_dir():
+    """Match the desktop app's writable per-user data directory."""
+    if sys.platform == "darwin":
+        return os.path.join(
+            os.path.expanduser("~"), "Library", "Application Support", "Amadeus")
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Roaming")
+        # Keep the existing Windows directory for upgrade compatibility.
+        return os.path.join(base, "timepet")
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "amadeus")
 
 
 def config_path():
-    return os.path.join(appdata_timepet_dir(), "config.json")
+    return os.path.join(amadeus_data_dir(), "config.json")
 
 
 def read_config():
@@ -141,6 +150,7 @@ def read_config():
 
 def write_config(cfg):
     cfg_file = config_path()
+    os.makedirs(os.path.dirname(cfg_file), exist_ok=True)
     with open(cfg_file, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=4)
 
@@ -154,7 +164,7 @@ def set_model_path(model_json_path):
 
 
 def models_roots():
-    user_root = os.path.join(appdata_timepet_dir(), "models")
+    user_root = os.path.join(amadeus_data_dir(), "models")
     exe_root = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "models")
     return [("user", user_root), ("exe", exe_root)]
 
@@ -383,7 +393,7 @@ def main():
 
     p_list = sub.add_parser("list", help="列出已安装模型")
     p_switch = sub.add_parser("switch", help="切换当前模型")
-    p_switch.add_argument("target", help="已安装模型名（如 shizuku）或模型 json 绝对路径")
+    p_switch.add_argument("target", help="已安装模型名（如 my-avatar）或模型 json 绝对路径")
     p_check = sub.add_parser("check", help="只校验模型资源，不复制")
     p_check.add_argument("model", help="模型文件夹或模型 json 文件路径")
     sub.add_parser("status", help="查看当前模型/人格/数据服务状态")

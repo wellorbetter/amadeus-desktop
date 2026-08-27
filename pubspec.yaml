@@ -1,5 +1,5 @@
 name: timepet
-description: "TimeTrace 桌宠助手：牧濑红莉栖（Flutter + WebView2 Live2D，可选接入 TimeTrace 使用数据）"
+description: "Amadeus：本地优先、可主动交互、拥有用户可控记忆的跨平台桌面 Agent"
 publish_to: 'none'
 version: 0.1.0+1
 
@@ -16,6 +16,7 @@ dependencies:
   sqlite3: ^3.5.1
   sqlite3_flutter_libs: ^0.6.0+eol
   tray_manager: ^0.5.3
+  webview_flutter: ^4.13.0
   webview_windows: ^0.4.0
   window_manager: ^0.5.2
 

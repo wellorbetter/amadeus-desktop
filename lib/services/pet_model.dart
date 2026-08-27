@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'app_paths.dart';
 import 'pet_config.dart';
 import 'pet_logger.dart';
 
@@ -8,7 +9,7 @@ import 'pet_logger.dart';
 /// 查找顺序：
 /// 1. 配置 `appearance.modelPath`（显式指定模型 json 绝对/相对路径）
 /// 2. `<exe>/models/` 递归扫描
-/// 3. `%APPDATA%/timepet/models/` 递归扫描
+/// 3. 当前平台的用户数据目录 `models/` 递归扫描
 ///
 /// 返回模型 json 文件名与所在目录（虚拟主机 model.local 映射该目录）。
 /// 注意：仅支持 Cubism 2.1（.model.json）；Cubism 5（model3.json）暂不支持，
@@ -48,9 +49,10 @@ class PetModel {
     if (missing.isNotEmpty) {
       throw ArgumentError('模型包缺少资源：${missing.take(3).join('、')}');
     }
-    final files = Directory(
-      packagePath,
-    ).listSync(recursive: true, followLinks: false).whereType<File>().length;
+    final files = Directory(packagePath)
+        .listSync(recursive: true, followLinks: false)
+        .whereType<File>()
+        .length;
     return (entryPath: entry.path, files: files);
   }
 
@@ -94,9 +96,7 @@ class PetModel {
 
   static List<String> get _roots {
     final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final appData =
-        Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
-    return ['$exeDir/models', '$appData/timepet/models'];
+    return ['$exeDir/models', AppPaths.modelsDirectory.path];
   }
 
   static ({String file, String dir})? _scan(String root) {
@@ -283,9 +283,8 @@ class PetModel {
             !extensions.any(lower.endsWith)) {
           return;
         }
-        if (!File(
-          '${root.path}${Platform.pathSeparator}$normalized',
-        ).existsSync()) {
+        if (!File('${root.path}${Platform.pathSeparator}$normalized')
+            .existsSync()) {
           missing.add(normalized);
         }
       }

@@ -15,6 +15,7 @@ void main() {
     cfg.aiBaseUrl = 'https://example.invalid/v1';
     cfg.aiModel = 'broken-model';
     cfg.modelPath = 'C:/old/model.json';
+    cfg.timeTraceEnabled = false;
     cfg.save();
     cfg.resetToDefaults();
 
@@ -24,6 +25,7 @@ void main() {
     expect(cfg.aiModel, 'gpt-5.6-luna');
     expect(cfg.modelPath, isEmpty);
     expect(cfg.soulText, isEmpty);
+    expect(cfg.timeTraceEnabled, isTrue);
 
     final reloaded = PetConfig(pathOverride: '${dir.path}/config.json')..load();
     expect(reloaded.aiBaseUrl, 'https://api.openai.com/v1');

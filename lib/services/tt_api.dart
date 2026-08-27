@@ -1,6 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sqlite3/sqlite3.dart';
+
+import 'app_paths.dart';
+import 'observation_source.dart';
+import 'pet_config.dart';
+
 /// 单日聚合数据（来自本地 8788 /api/history）。
 class DayInfo {
   DayInfo({
@@ -92,7 +98,12 @@ class HourUsage {
 }
 
 /// TimeTrace 聚合数据（本地 8788 API：今日 context + 历史日聚合）。
-class TtApi {
+class TtApi implements ObservationSource {
+  @override
+  String get id => 'timetrace';
+
+  @override
+  String get displayName => 'TimeTrace';
   TtApi({String? base})
     : base =
           base ??
@@ -113,6 +124,7 @@ class TtApi {
   /// 历史数据缓存间隔：每 60 秒 tick 只拉实时 context，历史 7 天聚合 5 分钟刷一次。
   static const Duration _historyCache = Duration(minutes: 5);
 
+  @override
   bool get hasData => _lastSync != null;
   bool get hasHistory => _history.isNotEmpty;
   List<DayInfo> get history => List.unmodifiable(_history);
@@ -125,12 +137,21 @@ class TtApi {
   static bool isSelfApp(String value) {
     final name = value.trim().toLowerCase();
     return const {
-      'timepet', 'timepet.exe', 'amadeus', 'amadeus.exe',
-      'amadeus-desktop', 'amadeus-desktop.exe',
+      'timepet',
+      'timepet.exe',
+      'amadeus',
+      'amadeus.exe',
+      'amadeus-desktop',
+      'amadeus-desktop.exe',
     }.contains(name);
   }
 
+  @override
   Future<bool> refresh() async {
+    if (!PetConfig.instance.timeTraceEnabled) {
+      _clear();
+      return false;
+    }
     var ok = false;
     try {
       final ctx = await _getJson('/api/context');
@@ -177,9 +198,154 @@ class TtApi {
       ok = ok || hasHistory;
     }
 
+    if (!ok) ok = _refreshFromLocalDatabase();
     if (ok) _lastSync = DateTime.now();
     return ok;
   }
+
+  void _clear() {
+    _foreground = '-';
+    _activeMin = 0;
+    _switches = 0;
+    _idleMin = 0;
+    _topApp = '-';
+    _lastActive = '-';
+    _nowHour = '';
+    _lastSync = null;
+    _lastHistoryAt = null;
+    _history.clear();
+  }
+
+  /// Native read-only fallback used when the optional legacy HTTP bridge is
+  /// absent. This makes TimeTrace an in-process observation capability on both
+  /// Windows and macOS and removes the runtime Node.js dependency.
+  bool _refreshFromLocalDatabase() {
+    for (final candidate in AppPaths.timeTraceDatabases) {
+      if (!candidate.existsSync()) continue;
+      Database? db;
+      try {
+        db = sqlite3.open(candidate.path, mode: OpenMode.readOnly);
+        final today = _dateKey(DateTime.now());
+        final sessions = _sessions(db, today);
+        _applyToday(sessions);
+
+        _history.clear();
+        for (var daysAgo = 7; daysAgo >= 1; daysAgo--) {
+          final date = DateTime.now().subtract(Duration(days: daysAgo));
+          final key = _dateKey(date);
+          final daySessions = _sessions(db, key);
+          var activeSeconds = 0;
+          var idleSeconds = 0;
+          final apps = <String, int>{};
+          final hours = <int, int>{};
+          for (final row in daySessions) {
+            final seconds = (row['duration_secs'] as num?)?.toInt() ?? 0;
+            final idle = (row['is_idle'] as num?)?.toInt() == 1;
+            if (idle) {
+              idleSeconds += seconds;
+              continue;
+            }
+            activeSeconds += seconds;
+            final app = '${row['app_name'] ?? '-'}';
+            if (!isSelfApp(app)) apps[app] = (apps[app] ?? 0) + seconds;
+            final started = '${row['started_at'] ?? ''}';
+            final hour = started.length >= 13
+                ? int.tryParse(started.substring(11, 13))
+                : null;
+            if (hour != null) hours[hour] = (hours[hour] ?? 0) + seconds;
+          }
+          final sortedApps = apps.entries.toList()
+            ..sort((a, b) => b.value.compareTo(a.value));
+          final sortedHours = hours.entries.toList()
+            ..sort((a, b) => b.value.compareTo(a.value));
+          var diaryHas = false;
+          try {
+            diaryHas = db.select(
+              'SELECT 1 FROM diary_entries WHERE date = ? LIMIT 1',
+              [key],
+            ).isNotEmpty;
+          } catch (_) {}
+          _history.add(
+            DayInfo(
+              date: key,
+              activeMin: (activeSeconds / 60).round(),
+              idleMin: (idleSeconds / 60).round(),
+              topApps: sortedApps
+                  .take(8)
+                  .map(
+                    (entry) => AppUsage(
+                      name: entry.key,
+                      minutes: (entry.value / 60).round(),
+                    ),
+                  )
+                  .toList(),
+              peakHours: sortedHours
+                  .take(3)
+                  .map(
+                    (entry) => HourUsage(
+                      hour: entry.key,
+                      minutes: (entry.value / 60).round(),
+                    ),
+                  )
+                  .toList(),
+              diaryHas: diaryHas,
+            ),
+          );
+        }
+        _lastHistoryAt = DateTime.now();
+        return true;
+      } catch (error) {
+        stderr.writeln('TimeTrace local read failed: $error');
+      } finally {
+        db?.dispose();
+      }
+    }
+    return false;
+  }
+
+  ResultSet _sessions(Database db, String date) => db.select(
+    'SELECT app_name, duration_secs, is_idle, started_at, ended_at '
+    'FROM usage_sessions WHERE date = ? ORDER BY started_at DESC',
+    [date],
+  );
+
+  void _applyToday(ResultSet sessions) {
+    var activeSeconds = 0;
+    var idleSeconds = 0;
+    var switches = 0;
+    final apps = <String, int>{};
+    String? foreground;
+    String? lastActive;
+    for (final row in sessions) {
+      final seconds = (row['duration_secs'] as num?)?.toInt() ?? 0;
+      final idle = (row['is_idle'] as num?)?.toInt() == 1;
+      if (idle) {
+        idleSeconds += seconds;
+        continue;
+      }
+      final app = '${row['app_name'] ?? '-'}';
+      if (isSelfApp(app)) continue;
+      activeSeconds += seconds;
+      switches++;
+      apps[app] = (apps[app] ?? 0) + seconds;
+      foreground ??= app;
+      lastActive ??= '${row['ended_at'] ?? '进行中'}';
+    }
+    final sorted = apps.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    _foreground = foreground ?? '-';
+    _topApp = sorted.isEmpty ? '-' : sorted.first.key;
+    _activeMin = (activeSeconds / 60).round();
+    _idleMin = (idleSeconds / 60).round();
+    _switches = switches;
+    _lastActive = lastActive ?? '-';
+    _nowHour = DateTime.now().hour.toString();
+  }
+
+  String _dateKey(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 
   /// 历史日摘要（昨天/前天等），给 AI 作为语料。
   String historySummary() {
@@ -198,6 +364,7 @@ class TtApi {
   }
 
   /// 生成给 AI 的聚合摘要（只含统计数据，不含任何路径/截图）。
+  @override
   String summary() {
     final sb = StringBuffer();
     if (!hasData) {

@@ -5,6 +5,7 @@ import 'package:window_manager/window_manager.dart';
 import '../services/pet_config.dart';
 import '../services/pet_logger.dart';
 import '../services/pet_memory.dart';
+import 'amadeus_theme.dart';
 import 'settings_panel.dart';
 import 'model_setup_page.dart';
 
@@ -29,49 +30,6 @@ class _SettingsWindowAppState extends State<SettingsWindowApp> {
     PetMemory.instance.load();
   }
 
-  ThemeData _theme(Brightness brightness) {
-    final dark = brightness == Brightness.dark;
-    final scheme =
-        ColorScheme.fromSeed(
-          seedColor: dark ? const Color(0xFFB86F80) : const Color(0xFF8D4454),
-          brightness: brightness,
-        ).copyWith(
-          surface: dark ? const Color(0xFF121116) : const Color(0xFFF9F6F7),
-          surfaceContainerLowest: dark
-              ? const Color(0xFF0D0C10)
-              : const Color(0xFFFFFFFF),
-          surfaceContainerLow: dark
-              ? const Color(0xFF19171E)
-              : const Color(0xFFF5EFF1),
-          surfaceContainer: dark
-              ? const Color(0xFF211E27)
-              : const Color(0xFFF0E7EA),
-          primary: dark ? const Color(0xFFE5A3B1) : const Color(0xFF8D4454),
-          secondary: dark ? const Color(0xFFB8C3D9) : const Color(0xFF526079),
-          outline: dark ? const Color(0xFF8F8997) : const Color(0xFF7B7377),
-        );
-    return ThemeData(
-      useMaterial3: true,
-      brightness: brightness,
-      fontFamily: 'Microsoft YaHei',
-      colorScheme: scheme,
-      scaffoldBackgroundColor: Colors.transparent,
-      cardTheme: CardThemeData(
-        elevation: 0,
-        color: scheme.surfaceContainerLow.withValues(alpha: 0.9),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: scheme.surfaceContainer.withValues(alpha: 0.82),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: scheme.outlineVariant),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<int>(
@@ -81,8 +39,8 @@ class _SettingsWindowAppState extends State<SettingsWindowApp> {
         return MaterialApp(
           debugShowCheckedModeBanner: false,
           title: '设置',
-          theme: _theme(Brightness.light),
-          darkTheme: _theme(Brightness.dark),
+          theme: AmadeusTheme.light(),
+          darkTheme: AmadeusTheme.dark(),
           themeMode: dark ? ThemeMode.dark : ThemeMode.light,
           home: SettingsWindowPage(modelSetup: widget.modelSetup),
         );
@@ -118,12 +76,14 @@ class _SettingsWindowPageState extends State<SettingsWindowPage> {
           await windowManager.focus();
         }
       });
-      await windowManager.setTitle(widget.modelSetup ? 'TimePet 模型设置' : '设置');
+      await windowManager.setTitle(
+        widget.modelSetup ? '欢迎使用 Amadeus' : 'Amadeus 设置',
+      );
       await windowManager.setSize(
-        widget.modelSetup ? const Size(720, 760) : const Size(820, 620),
+        widget.modelSetup ? const Size(900, 720) : const Size(980, 700),
       );
       await windowManager.setMinimumSize(
-        widget.modelSetup ? const Size(620, 560) : const Size(640, 480),
+        widget.modelSetup ? const Size(760, 620) : const Size(760, 560),
       );
       await windowManager.center();
       await windowManager.show();

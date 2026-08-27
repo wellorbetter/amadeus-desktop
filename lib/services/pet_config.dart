@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-/// 动态配置：%APPDATA%/timepet/config.json
+import 'app_paths.dart';
+
+/// 动态配置：由 [AppPaths] 解析当前平台的用户数据目录。
 /// 设置面板修改即时保存并热生效，无需重启；也支持外部编辑后 60 秒自动热加载。
 class PetConfig {
   PetConfig({String? pathOverride}) : _pathOverride = pathOverride;
@@ -31,8 +33,7 @@ class PetConfig {
   int bubbleAutoHideSeconds = 8; // 气泡自动隐藏秒数
   bool darkMode = true; // 设置窗口深浅主题（true=深色）
   double settingsOpacity = 0.96; // 设置窗口整体透明度
-  String modelPath =
-      ''; // Live2D 模型 json 路径（留空自动扫描 exe 目录/models 与 %APPDATA%/timepet/models）
+  String modelPath = ''; // Live2D 模型 json 路径（留空自动扫描 exe 与用户数据目录的 models）
 
   // ---- 主动对话 ----
   bool proactiveEnabled = true;
@@ -57,6 +58,9 @@ class PetConfig {
   // ---- 聊天 ----
   int chatAutoHideSeconds = 20; // 无操作多少秒后自动收起输入框
 
+  // ---- Agent capabilities ----
+  bool timeTraceEnabled = true; // Optional read-only observation source
+
   // ---- AI ----
   bool aiEnabled = true;
   String aiAuthMode = 'openai_api_key';
@@ -64,8 +68,7 @@ class PetConfig {
   String aiBaseUrl = 'https://api.openai.com/v1';
   String aiModel = 'gpt-5.6-luna';
   String soulText = '';
-  String soulFile =
-      ''; // 人格插件 soul.md 路径（留空自动检测 %APPDATA%/timepet/soul.md 或 exe 目录/soul.md）
+  String soulFile = ''; // 人格 soul.md 路径（留空自动检测用户数据目录或 exe 目录）
   double aiTemperature = 0.8;
   int aiMaxTokens = 800; // AI 单次回复最大 token 数（防长回复截断）
 
@@ -82,16 +85,13 @@ class PetConfig {
   String get path {
     final override = _pathOverride;
     if (override != null) return override;
-    final appData =
-        Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
-    return '$appData/timepet/config.json';
+    return AppPaths.configFile.path;
   }
 
   File get file => _file ??= File(path);
 
   Map<String, dynamic> _defaults() => {
-    '_说明':
-        'TimeTrace 桌宠动态配置。设置面板修改即时生效；外部编辑后 60 秒内自动热加载（无需重启）。proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠（空闲时停止主动对话/记忆审核，省 token）；appearance 为模型/气泡外观；ai 为对话模型；log 为日志；window 为窗口行为。',
+    '_说明': 'TimeTrace 桌宠动态配置。设置面板修改即时生效；外部编辑后 60 秒内自动热加载（无需重启）。proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠（空闲时停止主动对话/记忆审核，省 token）；appearance 为模型/气泡外观；ai 为对话模型；log 为日志；window 为窗口行为。',
     'appearance': {
       'modelScale': 1.0,
       'displayWidth': 440,
@@ -125,6 +125,9 @@ class PetConfig {
       },
     },
     'chat': {'autoHideSeconds': 20},
+    'capabilities': {
+      'timetrace': {'enabled': true},
+    },
     'sleep': {'enabled': true, 'idleMinutes': 15, 'adaptiveFrequency': true},
     'ai': {
       'enabled': true,
@@ -237,6 +240,9 @@ class PetConfig {
       },
     },
     'chat': {'autoHideSeconds': chatAutoHideSeconds},
+    'capabilities': {
+      'timetrace': {'enabled': timeTraceEnabled},
+    },
     'sleep': {
       'enabled': sleepEnabled,
       'idleMinutes': sleepIdleMinutes,
@@ -324,6 +330,13 @@ class PetConfig {
         c['autoHideSeconds'],
         20,
       ).clamp(1, 600).toInt();
+    }
+    final capabilities = json['capabilities'];
+    if (capabilities is Map<String, dynamic>) {
+      final timetrace = capabilities['timetrace'];
+      if (timetrace is Map<String, dynamic>) {
+        timeTraceEnabled = timetrace['enabled'] as bool? ?? true;
+      }
     }
     final sl = json['sleep'];
     if (sl is Map<String, dynamic>) {

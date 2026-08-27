@@ -1,157 +1,82 @@
 <p align="center">
-  <img src="assets/docs/icon.png" width="96" alt="Amadeus">
+  <img src="assets/docs/icon.png" width="88" alt="Amadeus">
 </p>
 
-<h1 align="center">Amadeus · Makise Kurisu AI Desktop Pet</h1>
-
-<p align="center">
-  A local-first AI companion desktop pet for Windows
-  <br>
-  <b>Flutter</b> + <b>WebView2 Live2D</b> · optionally wired to <b>TimeTrace</b> usage data, so she "knows" what you are doing
-</p>
+<h1 align="center">Amadeus · Personal Desktop Agent</h1>
 
 <p align="center">
-  <a href="README.md">中文</a>
-  ·
-  <img src="https://img.shields.io/github/stars/wellorbetter/amadeus-desktop" alt="Stars">
-  ·
-  <img src="https://img.shields.io/github/license/wellorbetter/amadeus-desktop" alt="License">
+  A local-first, proactive desktop companion with user-controlled memory for Windows and macOS
 </p>
+
+<p align="center"><a href="README.md">中文</a></p>
 
 ---
 
-## Features
+## What it is
 
-- **AI companion chat** — DeepSeek by default, works with any OpenAI-compatible API; persona is a pluggable `soul.md`, swap characters freely
-- **Knows what you are doing (optional)** — a local bridge reads TimeTrace data read-only: which app you use, today's active time, what you did yesterday
-- **Proactive trigger engine** — 15 built-in triggers (hourly / late night / long session / app-switch spike / idle return / focus reminder / memory nudge...)
-- **Zero-token idle sleep** — auto-sleeps when the system sleeps or you are away, resumes on return; no wasted API spend
-- **Long-term memory** — chat memory / journal / long-term memory in SQLite at `%APPDATA%\timepet\mem.db`
-- **Native pet experience** — frameless transparent window, free drag, system tray, right-click menu; Live2D expressions / motions / lip-sync
+Amadeus is an independent personal desktop agent. The pet is its interaction surface, TimeTrace is an optional observation capability, and local SQLite is its user-controlled memory layer.
 
-## Screenshots
-
-| | |
-| --- | --- |
-| ![Pet](assets/docs/screenshots/pet.png) | ![Chat](assets/docs/screenshots/chat.png) |
-| ![Settings](assets/docs/screenshots/settings.png) | ![Model](assets/docs/screenshots/model.png) |
-
-## Tech Stack
-
-| Module | Description |
-| --- | --- |
-| `lib/` | Flutter app: window / tray / trigger engine / memory / settings |
-| `assets/web/` | kurisu.html + live2d-widget rendering layer (WebView2) |
-| `assets/bridge/` | Node bridge: read-only `time.db`, exposes `127.0.0.1:8788` local API |
-| `tools/` | Model import / download scripts (Python) |
-
-## Quick Start
-
-1. Download `timepet-windows.zip` from [Releases](https://github.com/wellorbetter/amadeus-desktop/releases) and unzip
-2. Set `DEEPSEEK_API_KEY=sk-...` and run `timepet.exe`
-3. Import a Live2D model as described below — or just run `python tools\download_model.py pick --list` and `pick <name> --set-config` for a one-command out-of-the-box model (the repo itself ships no model assets)
-4. Optional: install and run TimeTrace on this machine and the pet picks up your usage data automatically
-
-## Model Import
-
-The pet = app source + optional `soul.md` + **your own** Live2D model. The repo **does not bundle any model** (`models/` is git-ignored).
-
-### Option A: Import a local model
-
-```bat
-python tools\import_model.py import D:\models\shizuku                  :: import into %APPDATA%\timepet\models\
-python tools\import_model.py import D:\models\shizuku --set-config     :: import and set as active
-python tools\import_model.py list                                        :: list installed models
-python tools\import_model.py switch shizuku                             :: switch active model
-python tools\import_model.py status                                      :: show model/config/soul/status
+```mermaid
+flowchart LR
+  O[Observations] --> C[Context]
+  C --> D[Triggers & decisions]
+  D --> I[Pet / conversation]
+  I --> M[User-controlled memory]
+  M --> C
 ```
 
-### Option B: Download a model (provide your own URL)
+This separation matters:
 
-```bat
-python tools\download_model.py download --url <model-zip-url>          :: download & import into %APPDATA%\timepet\models\
-python tools\download_model.py download --url <url> --set-config       :: download & set as active
-```
+- An observation is ephemeral context, not automatically a permanent memory.
+- A Live2D avatar is visual presentation, not the agent's personality.
+- TimeTrace can be disconnected without breaking chat or local memory.
+- Future calendar, GitHub, or system integrations can be added as capabilities instead of rewriting the agent.
 
-### Option C: One-command pick from the built-in model repo (out of the box)
+## Highlights
 
-```bat
-python tools\download_model.py pick --list                            :: list built-in models (name / description)
-python tools\download_model.py pick shizuku                           :: download & import Shizuku
-python tools\download_model.py pick wed_16 --set-config               :: download, import & set active (use after restart)
-```
+- OpenAI, DeepSeek, and custom OpenAI-compatible endpoints
+- Streaming chat with incomplete-response protection
+- Configurable proactive triggers, rate limits, adaptive quiet mode, and idle sleep
+- Local SQLite memory and privacy-filtered TimeTrace summaries
+- Local Cubism 2.1 model import with dependency validation
+- WebView2 on Windows and WKWebView on macOS
+- Cross-platform tray, transparent pet window, and a dedicated settings window
+- Rights-aware onboarding and a cohesive desktop settings experience
 
-> Built-in repo comes from the open-source free model collection [hacxy/l2d-models](https://github.com/hacxy/l2d-models) (CDN: `model.hacxy.cn`). Only Cubism 2.1 models the current engine can display are listed. Models belong to their original authors and are for personal, local study only. Do not use commercially, redistribute, or repackage. Cubism 2.1 (`.model.json`) models are supported.
+## Privacy and rights
 
-## Persona / Soul
+Amadeus never bundles or downloads third-party character models or personas. The public build ships with an original Amadeus persona. Users must confirm that they have the right to use imported assets; local personal use does not automatically grant redistribution or commercial rights.
 
-- Drop a `soul.md` into `%APPDATA%\timepet\` (or next to the exe) describing the character's personality, speech style and backstory in Markdown
-- See the [`soul.example.md`](soul.example.md) template
-- `soul.md` is git-ignored and never committed
+Model assets, persona files, API keys, raw window titles, screenshots, diary text, and database paths remain local. Online requests contain the user's message, necessary conversation context, and — only when relevant and enabled — a compact TimeTrace aggregate.
+
+Windows keeps the legacy `%APPDATA%\timepet` directory. macOS uses `~/Library/Application Support/Amadeus`.
 
 ## Build
 
-### Prerequisites
-
-- Windows 10/11
-- [Flutter SDK](https://docs.flutter.dev/get-started/install/windows) (stable channel)
-- Visual Studio (Desktop development with C++ workload)
-- Node.js (data bridge runtime)
-
-### Commands
+Use Flutter stable. Windows requires Visual Studio Desktop C++; macOS requires Xcode.
 
 ```bash
-# 1) Flutter static analysis
+flutter pub get
 flutter analyze
+flutter test
 
-# 2) Windows release build
 flutter build windows --release
-# Output: build\windows\x64\runner\Release\timepet.exe
+flutter build macos --release
 ```
 
-> On first build the `sqlite3` native library may fail to download due to network issues; grab `sqlite3.x64.windows.dll` from GitHub Releases and place it into the hooks directory (see build logs).
+GitHub Actions validates analysis/tests and builds on native Windows and macOS runners. The macOS CI artifact is not notarized; public distribution still requires Developer ID signing and Apple notarization to avoid Gatekeeper warnings.
 
-## Relation to TimeTrace
+## Architecture
 
-**Not required.** TimeTrace is an optional, read-only enhancement:
-
-- Without TimeTrace the pet works fully as a plain AI companion
-- With TimeTrace, `assets/bridge/server.mjs` (Node) reads `%APPDATA%\TimeTrace\time.db` **read-only**
-- The bridge exposes a JSON API at `127.0.0.1:8788`:
-
-| Endpoint | Description | Fields |
-| --- | --- | --- |
-| `GET /api/context` | Current context | `foreground_app` `today.active_min` `today.idle_min` `today.switches` `last_active_at` |
-| `GET /api/history?days=N` | History | `days[].date` `active_min` `idle_min` `top_apps[]` `peak_hours[]` `diary.has_entry` |
-
-> The bridge only reads fields from `usage_sessions` and never modifies TimeTrace data; if TimeTrace is not running the pet falls back to pure AI-companion mode.
-
-## Environment Variables
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `DEEPSEEK_API_KEY` | none | AI API key (required) |
-| `TIMEPET_MODEL` | `deepseek-chat` | or `deepseek-reasoner` |
-| `TIMEPET_BASE_URL` | `https://api.deepseek.com/v1` | OpenAI-compatible API base URL |
-| `TIMEPET_TT_API` | `http://127.0.0.1:8788` | TimeTrace bridge URL |
-| `TIMEPET_OPEN_SETTINGS` | none | set to `1` to open settings on launch |
-
-## Privacy
-
-Everything stays local: memory in local SQLite, the bridge only reads TimeTrace, and the only external call is the AI API you configured.
-
-## How It Was Built
-
-Vibe-coded end to end: prototyped with DeepSeek V4 Flash + Pi, then polished with Codex for performance and UX (same workflow as TimeTrace).
+| Module | Responsibility |
+| --- | --- |
+| `observation_source.dart` | Agent capability boundary |
+| `tt_api.dart` | TimeTrace HTTP and native read-only SQLite adapter |
+| `pet_memory.dart` | Memory selection, retrieval, and profile synthesis |
+| `trigger_engine.dart` | Initiative and interruption control |
+| `lib/ui/` | Onboarding, settings, chat bubble, and input |
+| `assets/web/` | Cross-platform Live2D web renderer |
 
 ## License
 
-[GPL-3.0](LICENSE). Note: this repo **does not bundle any Live2D model assets**.
-
-- Makise Kurisu is an IP owned by the Steins;Gate rights holders
-- The Live2D model used in demos is a third-party fan-made resource, used locally for technical demo only; model files are not distributed
-- Obtain your own compliant fan-made model for personal, local study only
-- No commercial use, redistribution, or repackaging of models
-- This project is not affiliated with the Steins;Gate official team or the model authors
-
-`assets/web/vendor/live2d-widget` is based on [stevenjoezhang/live2d-widget](https://github.com/stevenjoezhang/live2d-widget) (AGPL-3.0); see `assets/web/vendor/live2d-widget/LICENSE`.
+[GPL-3.0](LICENSE). `assets/web/vendor/live2d-widget` is based on `stevenjoezhang/live2d-widget` (AGPL-3.0); see its bundled license.

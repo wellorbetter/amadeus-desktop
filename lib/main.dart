@@ -46,7 +46,7 @@ void main() async {
       await PetWindow.setup();
       PetLog.i('main: PetWindow.setup done');
 
-      runApp(const KurisuPetApp());
+      runApp(const AmadeusApp());
     },
     (error, stack) {
       PetLog.e('zone error: $error\n$stack');

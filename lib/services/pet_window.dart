@@ -133,7 +133,7 @@ class PetWindow {
   static Future<void> setupTray() async {
     final iconPath = await _extractTrayIcon();
     await trayManager.setIcon(iconPath);
-    await trayManager.setToolTip('TimeTrace 助手 · 牧濑红莉栖');
+    await trayManager.setToolTip('Amadeus · 个人桌面 Agent');
     await trayManager.setContextMenu(
       Menu(
         items: [
@@ -149,10 +149,14 @@ class PetWindow {
   }
 
   static Future<String> _extractTrayIcon() async {
-    final data = await rootBundle.load('assets/tray/tray.ico');
-    final dir = Directory('${Directory.systemTemp.path}/timepet');
+    final asset = Platform.isMacOS
+        ? 'assets/tray/tray.png'
+        : 'assets/tray/tray.ico';
+    final extension = Platform.isMacOS ? 'png' : 'ico';
+    final data = await rootBundle.load(asset);
+    final dir = Directory('${Directory.systemTemp.path}/amadeus');
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    final file = File('${dir.path}/tray.ico');
+    final file = File('${dir.path}/tray.$extension');
     await file.writeAsBytes(data.buffer.asUint8List());
     return file.path;
   }

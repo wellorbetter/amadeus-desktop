@@ -38,7 +38,7 @@ class PetMemory {
     if (rows.isEmpty) return '（暂无历史对话）';
     final sb = StringBuffer();
     for (final r in rows) {
-      final who = r['role'] == 'user' ? '用户' : '红莉栖';
+      final who = r['role'] == 'user' ? '用户' : 'Amadeus';
       var text = (r['content'] as String? ?? '').replaceAll('\n', ' ');
       if (text.length > 120) {
         text = '${text.substring(0, 120)}…'; // 单条消息截断，控制 token
