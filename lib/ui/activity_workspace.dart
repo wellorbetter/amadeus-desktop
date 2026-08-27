@@ -415,11 +415,12 @@ class _ActivityWorkspaceState extends State<ActivityWorkspace> {
     String? subtitle,
     Widget? trailing,
   }) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Padding(
         padding: const EdgeInsets.all(20),
