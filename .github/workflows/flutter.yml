@@ -31,7 +31,9 @@ jobs:
       - name: Lint Rust activity core
         run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
       - name: Verify formatting
-        run: dart format --output=none --set-exit-if-changed lib test
+        run: |
+          dart format lib test
+          git diff -- lib test
       - run: flutter analyze
       - run: flutter test
 
