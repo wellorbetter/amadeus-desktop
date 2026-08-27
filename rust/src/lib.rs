@@ -31,6 +31,12 @@ pub extern "C" fn amadeus_core_version() -> u32 {
 ///
 /// `excluded_apps` is a newline-separated UTF-8 list. Invalid pointers or
 /// invalid UTF-8 fail closed and return `DECISION_EXCLUDED`.
+///
+/// # Safety
+///
+/// `app_name` and `excluded_apps` must either be null or point to valid,
+/// NUL-terminated byte sequences for the duration of this call. The function
+/// does not retain either pointer and fails closed when UTF-8 decoding fails.
 #[no_mangle]
 pub unsafe extern "C" fn amadeus_activity_classify(
     app_name: *const c_char,
