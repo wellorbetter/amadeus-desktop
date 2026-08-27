@@ -41,11 +41,12 @@ void main() {
       final image = await boundary.toImage(pixelRatio: 1);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
-      if (bytes == null) throw StateError('Could not encode acceptance frame');
+      if (bytes == null) {
+        throw StateError('Could not encode acceptance frame');
+      }
       final name = index.toString().padLeft(2, '0');
-      File('${output.path}/frame-$name.png').writeAsBytesSync(
-        bytes.buffer.asUint8List(),
-      );
+      final frame = File('${output.path}/frame-$name.png');
+      frame.writeAsBytesSync(bytes.buffer.asUint8List());
       await tester.pump(const Duration(seconds: 4));
       await tester.pump(const Duration(milliseconds: 100));
     }
