@@ -76,6 +76,9 @@ void main() {
       memory.relevantMemories('继续学习 Rust 异步部分'),
       contains('Rust 异步编程'),
     );
-    expect(memory.relevantMemories('我的目标是什么'), contains('Rust 异步编程'));
+    expect(
+      memory.relevantMemories('我的目标是什么'),
+      contains('Rust 异步编程'),
+    );
   });
 }
