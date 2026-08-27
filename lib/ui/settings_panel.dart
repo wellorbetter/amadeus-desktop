@@ -74,6 +74,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _disposing = false;
   bool _apiKeyVisible = false;
   bool _navCollapsed = false;
+  bool _savePending = false;
 
   final _baseUrl = TextEditingController();
   final _model = TextEditingController();
@@ -122,7 +123,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void _commit() {
     _commitTimer?.cancel();
     _commitTimer = Timer(const Duration(milliseconds: 350), _saveNow);
-    if (mounted) setState(() {});
+    if (mounted) setState(() => _savePending = true);
   }
 
   void _saveNow() {
@@ -134,7 +135,7 @@ class _SettingsPageState extends State<SettingsPage> {
         mode: ChannelMode.unidirectional,
       ).invokeMethod('config-changed').catchError((_) {});
     } catch (_) {}
-    if (mounted && !_disposing) setState(() {});
+    if (mounted && !_disposing) setState(() => _savePending = false);
   }
 
   @override
@@ -168,7 +169,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         ? Column(
                             children: [
                               _compactNavigation(),
-                              Expanded(child: _content()),
+                              Expanded(child: _content(compact: true)),
                             ],
                           )
                         : Row(
@@ -178,7 +179,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                 width: 1,
                                 color: scheme.outlineVariant,
                               ),
-                              Expanded(child: _content()),
+                              Expanded(child: _content(compact: false)),
                             ],
                           ),
                   ),
@@ -229,6 +230,13 @@ class _SettingsPageState extends State<SettingsPage> {
               Text('设置', style: TextStyle(color: scheme.onSurfaceVariant)),
             ],
             const Spacer(),
+            if (!compact) ...[
+              _StatusPill(
+                color: _savePending ? scheme.secondary : AmadeusTheme.sage,
+                text: _savePending ? '正在保存' : '已保存',
+              ),
+              const SizedBox(width: 8),
+            ],
             _StatusPill(
               color: cfg.aiEnabled ? AmadeusTheme.mint : scheme.outline,
               text: cfg.aiEnabled ? 'AI 已启用' : 'AI 已暂停',
@@ -331,7 +339,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _content() {
+  Widget _content({required bool compact}) {
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 220),
       switchInCurve: Curves.easeOutCubic,
@@ -348,7 +356,9 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
       child: SingleChildScrollView(
         key: ValueKey(_section),
-        padding: const EdgeInsets.fromLTRB(32, 28, 32, 44),
+        padding: compact
+            ? const EdgeInsets.fromLTRB(18, 20, 18, 36)
+            : const EdgeInsets.fromLTRB(32, 28, 32, 44),
         child: Align(
           alignment: Alignment.topLeft,
           child: ConstrainedBox(
@@ -1272,7 +1282,7 @@ class _OverviewCard extends StatelessWidget {
     return Card(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         child: Padding(
           padding: const EdgeInsets.all(18),
           child: Column(

@@ -47,6 +47,24 @@ void main() {
     final dir = Directory.systemTemp.createTempSync('amadeus-activity-ui-');
     final config = PetConfig(pathOverride: '${dir.path}/config.json');
     final history = ActivityHistory(pathOverride: '${dir.path}/activity.db');
+    final now = DateTime.now();
+    final started = DateTime(now.year, now.month, now.day, 9);
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Android Studio',
+        appId: 'com.google.android.studio',
+        idleSeconds: 0,
+        capturedAt: started,
+      ),
+    );
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Android Studio',
+        appId: 'com.google.android.studio',
+        idleSeconds: 0,
+        capturedAt: started.add(const Duration(minutes: 2)),
+      ),
+    );
     addTearDown(() {
       history.close();
       dir.deleteSync(recursive: true);
@@ -64,6 +82,15 @@ void main() {
     expect(find.text('事件管线'), findsOneWidget);
     expect(find.text('采集与保留'), findsOneWidget);
     expect(find.text('排除应用'), findsOneWidget);
+    expect(find.text('7 天'), findsOneWidget);
+    expect(find.text('30 天'), findsOneWidget);
+
+    await tester.tap(find.text('Android Studio'));
+    await tester.pumpAndSettle();
+    expect(find.text('活动片段详情'), findsOneWidget);
+    expect(find.textContaining('没有窗口标题或输入内容'), findsOneWidget);
+    await tester.tap(find.text('完成'));
+    await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox());
   });
 }

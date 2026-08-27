@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../services/activity_history.dart';
@@ -9,7 +12,7 @@ import 'amadeus_theme.dart';
 /// This intentionally separates "what the agent observed" from "what the
 /// agent remembers". The layout follows an event-stream mental model: current
 /// status, derived projections, recent episodes, then source controls.
-class ActivityWorkspace extends StatelessWidget {
+class ActivityWorkspace extends StatefulWidget {
   const ActivityWorkspace({
     super.key,
     required this.config,
@@ -22,31 +25,99 @@ class ActivityWorkspace extends StatelessWidget {
   final PetConfig config;
   final TextEditingController excludedAppsController;
   final VoidCallback onChanged;
-  final VoidCallback onClear;
+  final Future<void> Function() onClear;
   final ActivityHistory? history;
 
   @override
-  Widget build(BuildContext context) {
-    final activityHistory = history ?? ActivityHistory.instance;
+  State<ActivityWorkspace> createState() => _ActivityWorkspaceState();
+}
+
+class _ActivityWorkspaceState extends State<ActivityWorkspace> {
+  Timer? _refreshTimer;
+  ActivityPulse? _pulse;
+  List<ActivityEpisode> _episodes = const [];
+  int _rangeDays = 7;
+  DateTime? _refreshedAt;
+
+  PetConfig get config => widget.config;
+  TextEditingController get excludedAppsController =>
+      widget.excludedAppsController;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload(notify: false);
+    _refreshTimer = Timer.periodic(
+      ActivityHistory.pollInterval,
+      (_) => _reload(),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant ActivityWorkspace oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.history != widget.history) _reload();
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  void _reload({bool notify = true}) {
+    final activityHistory = widget.history ?? ActivityHistory.instance;
     ActivityPulse? pulse;
     List<ActivityEpisode> episodes = const [];
     try {
-      pulse = activityHistory.pulse();
+      pulse = activityHistory.pulse(days: _rangeDays);
       episodes = activityHistory.recentEpisodes(limit: 8);
     } catch (_) {}
+    void assign() {
+      _pulse = pulse;
+      _episodes = episodes;
+      _refreshedAt = DateTime.now();
+    }
 
+    if (notify && mounted) {
+      setState(assign);
+    } else {
+      assign();
+    }
+  }
+
+  void onChanged() {
+    widget.onChanged();
+    _reload();
+  }
+
+  Future<void> _clearActivity() async {
+    await widget.onClear();
+    _reload();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Column(
       children: [
-        _hero(context, pulse),
+        _hero(context, _pulse),
         const SizedBox(height: 14),
         LayoutBuilder(
           builder: (context, constraints) {
             final stacked = constraints.maxWidth < 680;
             final rhythm = _panel(
               context,
-              title: '最近 7 天',
+              title: '活动节律',
               subtitle: '由短期事件流实时生成，不进入长期记忆',
-              child: _WeekBars(points: pulse?.days ?? const []),
+              trailing: _RangeSelector(
+                value: _rangeDays,
+                onSelected: (value) {
+                  if (value == _rangeDays) return;
+                  setState(() => _rangeDays = value);
+                  _reload();
+                },
+              ),
+              child: _WeekBars(points: _pulse?.days ?? const []),
             );
             final pipeline = _panel(
               context,
@@ -75,11 +146,11 @@ class ActivityWorkspace extends StatelessWidget {
           title: '活动片段',
           subtitle: '只展示应用级片段，不保存窗口标题或输入内容',
           trailing: TextButton.icon(
-            onPressed: onClear,
+            onPressed: _clearActivity,
             icon: const Icon(Icons.auto_delete_outlined, size: 18),
             label: const Text('按范围清理'),
           ),
-          child: _timeline(context, episodes),
+          child: _timeline(context, _episodes),
         ),
         const SizedBox(height: 14),
         _panel(
@@ -102,51 +173,43 @@ class ActivityWorkspace extends StatelessWidget {
               const Divider(height: 1),
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 15),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Column(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final label = const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('原始事件保留期'),
+                        SizedBox(height: 3),
+                        Text(
+                          '过期事件每小时自动清理；会话投影同步删除。',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    );
+                    final slider = _RetentionSlider(
+                      value: config.activityRetentionHours,
+                      onChanged: (value) {
+                        config.activityRetentionHours = value;
+                        onChanged();
+                      },
+                    );
+                    if (constraints.maxWidth < 560) {
+                      return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('原始事件保留期'),
-                          SizedBox(height: 3),
-                          Text(
-                            '过期事件每小时自动清理；会话投影同步删除。',
-                            style: TextStyle(fontSize: 12),
-                          ),
+                          label,
+                          const SizedBox(height: 10),
+                          slider,
                         ],
-                      ),
-                    ),
-                    SizedBox(
-                      width: 260,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Slider(
-                              value: config.activityRetentionHours
-                                  .clamp(1, 168)
-                                  .toDouble(),
-                              min: 1,
-                              max: 168,
-                              divisions: 167,
-                              onChanged: (value) {
-                                config.activityRetentionHours = value.round();
-                                onChanged();
-                              },
-                            ),
-                          ),
-                          SizedBox(
-                            width: 62,
-                            child: Text(
-                              '${config.activityRetentionHours} 小时',
-                              textAlign: TextAlign.end,
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: label),
+                        SizedBox(width: 280, child: slider),
+                      ],
+                    );
+                  },
                 ),
               ),
               const Divider(height: 1),
@@ -186,19 +249,15 @@ class ActivityWorkspace extends StatelessWidget {
         : (config.activityAwarenessPaused ? '已暂停，记录保持不变' : '正在理解你的工作节奏');
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            scheme.primary.withValues(alpha: 0.18),
-            scheme.tertiary.withValues(alpha: 0.08),
-            scheme.surfaceContainerLow,
-          ],
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: running
+              ? AmadeusTheme.sage.withValues(alpha: 0.36)
+              : scheme.outlineVariant,
         ),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -211,7 +270,7 @@ class ActivityWorkspace extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: (running ? AmadeusTheme.mint : scheme.outline)
                       .withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
                   running ? Icons.sensors_rounded : Icons.pause_rounded,
@@ -231,7 +290,7 @@ class ActivityWorkspace extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Rust Core v1 · 本机追加事件流 · ${config.activityRetentionHours} 小时自动过期',
+                      'Rust Core v1 · 本机事件流 · ${config.activityRetentionHours} 小时自动过期${_refreshText()}',
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   ],
@@ -253,11 +312,19 @@ class ActivityWorkspace extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
           _metrics(context, pulse),
         ],
       ),
     );
+  }
+
+  String _refreshText() {
+    final value = _refreshedAt;
+    if (value == null) return '';
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return ' · $hour:$minute 更新';
   }
 
   Widget _metrics(BuildContext context, ActivityPulse? pulse) {
@@ -297,11 +364,52 @@ class ActivityWorkspace extends StatelessWidget {
     return Column(
       children: [
         for (var index = 0; index < episodes.length; index++) ...[
-          _EpisodeRow(episode: episodes[index]),
+          _EpisodeRow(
+            episode: episodes[index],
+            onTap: () => _showEpisodeDetails(episodes[index]),
+          ),
           if (index < episodes.length - 1) const Divider(height: 1),
         ],
       ],
     );
+  }
+
+  Future<void> _showEpisodeDetails(ActivityEpisode episode) {
+    final start = _clock(episode.startedAt);
+    final end = _clock(episode.endedAt);
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('活动片段详情'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _DetailRow(label: '应用', value: episode.appName),
+              const Divider(height: 22),
+              _DetailRow(label: '时间', value: '$start – $end'),
+              const Divider(height: 22),
+              _DetailRow(label: '持续', value: episode.durationText),
+              const SizedBox(height: 18),
+              const _PrivacyBoundary(compact: true),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('完成'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _clock(DateTime value) {
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 
   Widget _panel(
@@ -311,41 +419,62 @@ class ActivityWorkspace extends StatelessWidget {
     String? subtitle,
     Widget? trailing,
   }) {
-    return Card(
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outlineVariant,
+        ),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final heading = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+                if (trailing == null) return heading;
+                if (constraints.maxWidth < 470) {
+                  return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                      if (subtitle != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          subtitle,
-                          style: TextStyle(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurfaceVariant,
-                            height: 1.4,
-                          ),
-                        ),
-                      ],
+                      heading,
+                      const SizedBox(height: 12),
+                      trailing,
                     ],
-                  ),
-                ),
-                ?trailing,
-              ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: heading),
+                    const SizedBox(width: 12),
+                    trailing,
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 18),
             child,
@@ -437,7 +566,7 @@ class _WeekBars extends StatelessWidget {
       (value, item) => item > value ? item : value,
     );
     final scheme = Theme.of(context).colorScheme;
-    if (points.isEmpty) {
+    if (points.isEmpty || values.every((value) => value == 0)) {
       return const SizedBox(
         height: 142,
         child: _WorkspaceEmpty(
@@ -447,65 +576,88 @@ class _WeekBars extends StatelessWidget {
         ),
       );
     }
-    return SizedBox(
-      height: 156,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          for (final point in points)
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 5),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Tooltip(
-                      message:
-                          '${point.activeSeconds ~/ 60} 分钟活跃 · ${point.idleSeconds ~/ 60} 分钟空闲',
-                      child: Container(
-                        height: 112,
-                        alignment: Alignment.bottomCenter,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(7),
-                          child: SizedBox(
-                            width: 22,
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                AnimatedContainer(
-                                  duration: const Duration(milliseconds: 420),
-                                  curve: Curves.easeOutCubic,
-                                  height: point.idleSeconds / maximum * 100,
-                                  color: scheme.outlineVariant,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final chartWidth = math.max(
+          constraints.maxWidth,
+          points.length * 38.0,
+        );
+        return SizedBox(
+          height: 162,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: chartWidth,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (final point in points)
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 5),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Tooltip(
+                              message:
+                                  '${point.date.month}/${point.date.day} · ${point.activeSeconds ~/ 60} 分钟活跃 · ${point.idleSeconds ~/ 60} 分钟空闲',
+                              child: Container(
+                                height: 112,
+                                alignment: Alignment.bottomCenter,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(5),
+                                  child: SizedBox(
+                                    width: 20,
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 360,
+                                          ),
+                                          curve: Curves.easeOutCubic,
+                                          height:
+                                              point.idleSeconds / maximum * 100,
+                                          color: scheme.outlineVariant,
+                                        ),
+                                        AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 360,
+                                          ),
+                                          curve: Curves.easeOutCubic,
+                                          height: point.activeSeconds == 0
+                                              ? 3
+                                              : point.activeSeconds /
+                                                    maximum *
+                                                    100,
+                                          color: AmadeusTheme.sage,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
-                                AnimatedContainer(
-                                  duration: const Duration(milliseconds: 420),
-                                  curve: Curves.easeOutCubic,
-                                  height: point.activeSeconds == 0
-                                      ? 4
-                                      : point.activeSeconds / maximum * 100,
-                                  color: AmadeusTheme.wine,
-                                ),
-                              ],
+                              ),
                             ),
-                          ),
+                            const SizedBox(height: 8),
+                            Text(
+                              points.length > 14
+                                  ? '${point.date.day}'
+                                  : _weekday(point.date.weekday),
+                              style: TextStyle(
+                                color: scheme.onSurfaceVariant,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _weekday(point.date.weekday),
-                      style: TextStyle(
-                        color: scheme.onSurfaceVariant,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
+                ],
               ),
             ),
-        ],
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -575,19 +727,26 @@ class _PipelineView extends StatelessWidget {
 }
 
 class _EpisodeRow extends StatelessWidget {
-  const _EpisodeRow({required this.episode});
+  const _EpisodeRow({required this.episode, required this.onTap});
 
   final ActivityEpisode episode;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final hour = episode.startedAt.hour.toString().padLeft(2, '0');
     final minute = episode.startedAt.minute.toString().padLeft(2, '0');
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 11),
-      child: Row(
-        children: [
+    return Semantics(
+      button: true,
+      label: '查看 ${episode.appName} 活动片段详情',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 11),
+          child: Row(
+            children: [
           CircleAvatar(
             radius: 17,
             backgroundColor: scheme.primary.withValues(alpha: 0.1),
@@ -616,15 +775,61 @@ class _EpisodeRow extends StatelessWidget {
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainer,
-              borderRadius: BorderRadius.circular(999),
-            ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainer,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  episode.durationText,
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: scheme.outline,
+                size: 18,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PrivacyBoundary extends StatelessWidget {
+  const _PrivacyBoundary({this.compact = false});
+
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(compact ? 12 : 14),
+      decoration: BoxDecoration(
+        color: scheme.tertiary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: scheme.tertiary.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.lock_outline_rounded, size: 19),
+          const SizedBox(width: 10),
+          Expanded(
             child: Text(
-              episode.durationText,
-              style: const TextStyle(fontSize: 11),
+              compact
+                  ? '这里只保存应用名、开始时间与持续时长；没有窗口标题或输入内容。'
+                  : '不采集截图、音频、窗口标题、文件路径、浏览记录或键盘输入。排除事件不会写入 activity.db。',
+              style: TextStyle(fontSize: 13, height: 1.45),
             ),
           ),
         ],
@@ -633,35 +838,81 @@ class _EpisodeRow extends StatelessWidget {
   }
 }
 
-class _PrivacyBoundary extends StatelessWidget {
-  const _PrivacyBoundary();
+class _RangeSelector extends StatelessWidget {
+  const _RangeSelector({required this.value, required this.onSelected});
+
+  final int value;
+  final ValueChanged<int> onSelected;
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: scheme.tertiary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: scheme.tertiary.withValues(alpha: 0.2)),
+  Widget build(BuildContext context) => SegmentedButton<int>(
+    segments: const [
+      ButtonSegment(value: 7, label: Text('7 天')),
+      ButtonSegment(value: 14, label: Text('14 天')),
+      ButtonSegment(value: 30, label: Text('30 天')),
+    ],
+    selected: {value},
+    showSelectedIcon: false,
+    onSelectionChanged: (values) => onSelected(values.first),
+    style: const ButtonStyle(visualDensity: VisualDensity.compact),
+  );
+}
+
+class _RetentionSlider extends StatelessWidget {
+  const _RetentionSlider({required this.value, required this.onChanged});
+
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(
+        child: Slider(
+          value: value.clamp(1, 168).toDouble(),
+          min: 1,
+          max: 168,
+          divisions: 167,
+          onChanged: (next) => onChanged(next.round()),
+        ),
       ),
-      child: const Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.lock_outline_rounded, size: 19),
-          SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              '不采集截图、音频、窗口标题、文件路径、浏览记录或键盘输入。排除事件不会写入 activity.db。',
-              style: TextStyle(fontSize: 13, height: 1.45),
-            ),
+      SizedBox(
+        width: 66,
+        child: Text(
+          '$value 小时',
+          textAlign: TextAlign.end,
+          style: const TextStyle(fontSize: 12),
+        ),
+      ),
+    ],
+  );
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 56,
+        child: Text(
+          label,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
           ),
-        ],
+        ),
       ),
-    );
-  }
+      Expanded(
+        child: Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ),
+    ],
+  );
 }
 
 class _WorkspaceEmpty extends StatelessWidget {
