@@ -344,7 +344,7 @@ class ActivityWorkspace extends StatelessWidget {
                     ],
                   ),
                 ),
-                trailing?,
+                ?trailing,
               ],
             ),
             const SizedBox(height: 18),
