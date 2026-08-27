@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
@@ -51,7 +50,7 @@ class PetAssetServer {
       return;
     }
 
-    Uint8List? bytes;
+    late final List<int> bytes;
     var name = segments.last;
     if (segments.first == 'web') {
       final asset = 'assets/web/${segments.skip(1).join('/')}';
@@ -88,16 +87,11 @@ class PetAssetServer {
       return;
     }
 
-    final body = bytes;
-    if (body == null) {
-      await _notFound(request);
-      return;
-    }
     request.response.headers
       ..set(HttpHeaders.contentTypeHeader, _contentType(name))
       ..set(HttpHeaders.cacheControlHeader, 'no-store')
       ..set('X-Content-Type-Options', 'nosniff');
-    request.response.add(body);
+    request.response.add(bytes);
     await request.response.close();
   }
 

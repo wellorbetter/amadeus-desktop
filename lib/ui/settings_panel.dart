@@ -641,8 +641,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   cfg.aiBaseUrl = 'https://api.openai.com/v1';
                 } else if (value == 'deepseek_api_key') {
                   cfg.aiBaseUrl = 'https://api.deepseek.com/v1';
-                  if (cfg.aiModel.startsWith('gpt-'))
+                  if (cfg.aiModel.startsWith('gpt-')) {
                     cfg.aiModel = 'deepseek-chat';
+                  }
                 }
                 _baseUrl.text = cfg.aiBaseUrl;
                 _model.text = cfg.aiModel;

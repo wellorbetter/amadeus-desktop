@@ -297,7 +297,7 @@ class TtApi implements ObservationSource {
       } catch (error) {
         stderr.writeln('TimeTrace local read failed: $error');
       } finally {
-        db?.dispose();
+        db?.close();
       }
     }
     return false;
