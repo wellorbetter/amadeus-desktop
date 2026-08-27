@@ -9,10 +9,12 @@ import 'package:window_manager/window_manager.dart';
 import 'services/ai_chat.dart';
 import 'services/avatar_controller.dart';
 import 'services/pet_config.dart';
+import 'services/pet_db.dart';
 import 'services/pet_logger.dart';
 import 'services/pet_memory.dart';
 import 'services/pet_model.dart';
 import 'services/pet_soul.dart';
+import 'services/pet_secret_store.dart';
 import 'services/pet_window.dart';
 import 'services/trigger_engine.dart';
 import 'services/tt_api.dart';
@@ -440,6 +442,7 @@ class _PetHomeState extends State<PetHome> {
 
   Future<void> _proactive(String prompt) async {
     if (_typing || !_aiActive) return;
+    PetDb.instance.setAgentState('speaking', '正在组织一次主动关心');
     _say('（Amadeus 想和你说句话…）');
     _bubbleTimer?.cancel();
     if (mounted) setState(() => _typing = true);
@@ -458,6 +461,7 @@ class _PetHomeState extends State<PetHome> {
     if (!complete) {
       final partial = reply.isNotEmpty ? reply : accumulated;
       _say(partial.isEmpty ? '回复中断了。' : '$partial\n\n（回复中断，未保存为完整对话）');
+      PetDb.instance.setAgentState('observing', '主动回复中断，继续观察');
       return;
     }
     final text = reply.isNotEmpty
@@ -466,6 +470,7 @@ class _PetHomeState extends State<PetHome> {
     PetMemory.instance.record('assistant', text);
     _say(text);
     _avatar.motion('tap_body');
+    PetDb.instance.setAgentState('observing', '主动互动完成，继续观察');
   }
 
   Future<void> _ask(String text) async {
@@ -474,6 +479,7 @@ class _PetHomeState extends State<PetHome> {
       return;
     }
     PetLog.i('app: ask start len=${text.length}');
+    PetDb.instance.setAgentState('speaking', '正在回复你的消息');
     _lastUserText = text;
     PetMemory.instance.record('user', text);
     _scheduleInputHide();
@@ -486,6 +492,7 @@ class _PetHomeState extends State<PetHome> {
     if (!_aiActive) {
       setState(() => _typing = false);
       _say('（AI 未启用，先去设置里打开吧）');
+      PetDb.instance.setAgentState('paused', 'AI 服务未启用');
       return;
     }
 
@@ -505,10 +512,12 @@ class _PetHomeState extends State<PetHome> {
     PetLog.i('app: ask reply len=${finalText.length} complete=$complete');
     if (finalText.isEmpty) {
       _say('（AI 没有回复，可能是网络或 Key 问题）');
+      PetDb.instance.setAgentState('observing', '回复失败，继续观察');
       return;
     }
     if (!complete) {
       _say('$finalText\n\n（回复中断，未保存为完整对话）');
+      PetDb.instance.setAgentState('observing', '回复中断，继续观察');
       return;
     }
     PetMemory.instance.record('assistant', finalText);
@@ -516,6 +525,7 @@ class _PetHomeState extends State<PetHome> {
     _avatar.motion('tap_body');
     // 异步记忆审核：提取值得长期记住的信息（不阻塞回复）
     unawaited(_auditMemory(text));
+    PetDb.instance.setAgentState('observing', '对话完成，继续观察');
   }
 
   void _showPetMenu(int x, int y) {
@@ -662,6 +672,7 @@ class _PetHomeState extends State<PetHome> {
     PetConfig.instance
         .reloadIfChanged(); // reload config from disk (settings-window path)
     final cfg = PetConfig.instance;
+    await PetSecretStore.instance.hydrate(cfg);
     PetSoul.instance.load(); // 人格插件热重载
     _ai.updateConfig(
       apiKey: cfg.aiApiKey.isEmpty ? null : cfg.aiApiKey,

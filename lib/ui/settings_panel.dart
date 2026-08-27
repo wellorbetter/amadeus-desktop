@@ -9,6 +9,7 @@ import '../services/pet_config.dart';
 import '../services/pet_db.dart';
 import '../services/pet_logger.dart';
 import '../services/pet_memory.dart';
+import '../services/pet_secret_store.dart';
 import 'activity_workspace.dart';
 import 'amadeus_theme.dart';
 
@@ -71,6 +72,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   _SettingsSection _section = _SettingsSection.overview;
   Timer? _commitTimer;
+  Timer? _secretCommitTimer;
   bool _disposing = false;
   bool _apiKeyVisible = false;
   bool _navCollapsed = false;
@@ -105,6 +107,11 @@ class _SettingsPageState extends State<SettingsPage> {
   void dispose() {
     _disposing = true;
     _commitTimer?.cancel();
+    final secretPending = _secretCommitTimer?.isActive ?? false;
+    _secretCommitTimer?.cancel();
+    if (secretPending) {
+      unawaited(PetSecretStore.instance.saveApiKey(cfg, cfg.aiApiKey));
+    }
     _saveNow();
     for (final controller in [
       _baseUrl,
@@ -136,6 +143,16 @@ class _SettingsPageState extends State<SettingsPage> {
       ).invokeMethod('config-changed').catchError((_) {});
     } catch (_) {}
     if (mounted && !_disposing) setState(() => _savePending = false);
+  }
+
+  void _commitApiKey(String value) {
+    cfg.aiApiKey = value.trim();
+    _secretCommitTimer?.cancel();
+    if (mounted) setState(() => _savePending = true);
+    _secretCommitTimer = Timer(const Duration(milliseconds: 650), () async {
+      await PetSecretStore.instance.saveApiKey(cfg, cfg.aiApiKey);
+      _saveNow();
+    });
   }
 
   @override
@@ -649,6 +666,12 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
       const SizedBox(height: 14),
       _SettingsCard(
+        title: '为什么主动开口',
+        subtitle: '每次真正触发都会在本机留下原因；频率限制未通过时不会请求 AI。',
+        child: _proactiveAudit(),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
         title: '休眠与打扰控制',
         subtitle: '空闲休眠期间不会调用 AI。',
         child: Column(
@@ -736,9 +759,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 tooltip: _apiKeyVisible ? '隐藏' : '显示',
               ),
               onChanged: (value) {
-                cfg.aiApiKey = value.trim();
-                _commit();
+                _commitApiKey(value);
               },
+            ),
+            const SizedBox(height: 8),
+            _InfoBanner(
+              icon: Icons.key_rounded,
+              text: 'API Key 保存在系统安全存储中，不再写入 config.json。',
+              color: Theme.of(context).colorScheme.primary,
             ),
             const SizedBox(height: 12),
             _field(
@@ -866,12 +894,31 @@ class _SettingsPageState extends State<SettingsPage> {
       _SettingsCard(
         title: '本地记忆',
         subtitle: '${_memoryCount()} 条长期记忆 · ${PetDb.instance.path}',
-        trailing: TextButton.icon(
-          onPressed: _memoryCount() == 0 ? null : _confirmClearMemories,
-          icon: const Icon(Icons.delete_outline_rounded, size: 18),
-          label: const Text('清除'),
+        trailing: Wrap(
+          spacing: 4,
+          children: [
+            TextButton.icon(
+              onPressed: _memoryCount() == 0 ? null : _openMemoryManager,
+              icon: const Icon(Icons.tune_rounded, size: 18),
+              label: const Text('管理'),
+            ),
+            IconButton(
+              onPressed: _memoryCount() == 0 ? null : _confirmClearMemories,
+              icon: const Icon(Icons.delete_outline_rounded, size: 18),
+              tooltip: '清除全部长期记忆',
+            ),
+          ],
         ),
-        child: _memoryPreview(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('允许自动保存的类型'),
+            const SizedBox(height: 8),
+            _memoryCategoryControls(),
+            const Divider(height: 28),
+            _memoryPreview(),
+          ],
+        ),
       ),
       const SizedBox(height: 14),
       _SettingsCard(
@@ -921,6 +968,100 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (_) {
       return 0;
     }
+  }
+
+  Widget _proactiveAudit() {
+    try {
+      final runtime = PetDb.instance.agentState();
+      final events = PetDb.instance.recentProactiveEvents(limit: 4);
+      final state = runtime?['state']?.toString() ?? 'unknown';
+      final stateLabel = switch (state) {
+        'observing' => '观察中',
+        'thinking' => '准备主动互动',
+        'speaking' => '对话中',
+        'sleeping' => '休眠中',
+        'paused' => '已暂停',
+        _ => '等待桌宠启动',
+      };
+      return Column(
+        children: [
+          _ArchitectureRow(
+            icon: state == 'sleeping'
+                ? Icons.bedtime_outlined
+                : Icons.radio_button_checked_rounded,
+            title: 'Agent $stateLabel',
+            body: runtime?['detail']?.toString() ?? '启动桌宠后显示实时状态',
+            badge: '本机状态',
+          ),
+          if (events.isNotEmpty) const Divider(height: 24),
+          for (var index = 0; index < events.length; index++) ...[
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              leading: const Icon(Icons.bolt_rounded, size: 18),
+              title: Text('${events[index]['label']}'),
+              subtitle: Text(
+                '${events[index]['reason']}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Text(_shortTime('${events[index]['ts']}')),
+            ),
+            if (index < events.length - 1) const Divider(height: 1),
+          ],
+          if (events.isEmpty)
+            const _EmptyState(
+              icon: Icons.bolt_outlined,
+              title: '还没有主动互动记录',
+              body: '触发发生后，这里会说明是整点、久坐、记忆关心还是其他条件。',
+            ),
+        ],
+      );
+    } catch (_) {
+      return const _EmptyState(
+        icon: Icons.bolt_outlined,
+        title: '等待运行记录',
+        body: '启动桌宠后会在本机记录主动互动原因。',
+      );
+    }
+  }
+
+  String _shortTime(String raw) {
+    final value = DateTime.tryParse(raw)?.toLocal();
+    if (value == null) return '';
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '${value.month}/${value.day} $hour:$minute';
+  }
+
+  Widget _memoryCategoryControls() {
+    const labels = {
+      'preference': '偏好',
+      'habit': '习惯',
+      'goal': '目标',
+      'fact': '事实',
+      'event': '事件',
+      'relationship': '关系',
+    };
+    final disabled = cfg.memoryDisabledCategories.toSet();
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final entry in labels.entries)
+          FilterChip(
+            selected: !disabled.contains(entry.key),
+            label: Text(entry.value),
+            onSelected: (allowed) {
+              final next = cfg.memoryDisabledCategories.toSet();
+              allowed ? next.remove(entry.key) : next.add(entry.key);
+              cfg.memoryDisabledCategories = next.toList(growable: false);
+              _commit();
+              setState(() {});
+            },
+          ),
+      ],
+    );
   }
 
   Future<void> _confirmClearActivity() async {
@@ -992,6 +1133,177 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _openMemoryManager() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refreshDialog) {
+          final rows = PetDb.instance.recentMemoryRows(limit: 200);
+          return Dialog(
+            child: SizedBox(
+              width: 680,
+              height: 560,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(22, 18, 12, 10),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '长期记忆管理',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text('点击编辑内容、类型与重要度；删除后不会再被召回。'),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(dialogContext),
+                          icon: const Icon(Icons.close_rounded),
+                          tooltip: '关闭',
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: rows.isEmpty
+                        ? const Center(child: Text('没有长期记忆'))
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(14),
+                            itemCount: rows.length,
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final row = rows[index];
+                              return ListTile(
+                                title: Text('${row['content']}'),
+                                subtitle: Text(
+                                  '${row['category']} · 重要度 ${row['importance']} · ${_shortTime('${row['ts']}')}',
+                                ),
+                                onTap: () async {
+                                  await _editMemory(row);
+                                  refreshDialog(() {});
+                                  if (mounted) setState(() {});
+                                },
+                                trailing: IconButton(
+                                  onPressed: () {
+                                    PetDb.instance.deleteMemory(
+                                      row['id'] as int,
+                                    );
+                                    refreshDialog(() {});
+                                    if (mounted) setState(() {});
+                                  },
+                                  icon: const Icon(
+                                    Icons.delete_outline_rounded,
+                                  ),
+                                  tooltip: '删除',
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _editMemory(Map<String, Object?> row) async {
+    const categories = [
+      'preference',
+      'habit',
+      'goal',
+      'fact',
+      'event',
+      'relationship',
+    ];
+    final controller = TextEditingController(text: '${row['content']}');
+    var category = '${row['category']}';
+    if (!categories.contains(category)) category = 'fact';
+    var importance = (row['importance'] as int? ?? 1).clamp(1, 5);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, refresh) => AlertDialog(
+          title: const Text('编辑记忆'),
+          content: SizedBox(
+            width: 500,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controller,
+                  maxLines: 4,
+                  decoration: const InputDecoration(labelText: '内容'),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<String>(
+                  initialValue: category,
+                  decoration: const InputDecoration(labelText: '类型'),
+                  items: [
+                    for (final item in categories)
+                      DropdownMenuItem(value: item, child: Text(item)),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) refresh(() => category = value);
+                  },
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    const Text('重要度'),
+                    Expanded(
+                      child: Slider(
+                        value: importance.toDouble(),
+                        min: 1,
+                        max: 5,
+                        divisions: 4,
+                        label: '$importance',
+                        onChanged: (value) =>
+                            refresh(() => importance = value.round()),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && controller.text.trim().isNotEmpty) {
+      PetDb.instance.updateMemory(
+        row['id'] as int,
+        content: controller.text,
+        category: category,
+        importance: importance,
+      );
+    }
+    controller.dispose();
+  }
+
   Future<void> _confirmClearMemories() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -1036,6 +1348,8 @@ class _SettingsPageState extends State<SettingsPage> {
     );
     if (ok == true) {
       _commitTimer?.cancel();
+      _secretCommitTimer?.cancel();
+      await PetSecretStore.instance.clearApiKey(cfg);
       cfg.resetToDefaults();
       _syncControllers();
       _saveNow();

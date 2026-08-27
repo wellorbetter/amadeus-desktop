@@ -7,6 +7,15 @@ import 'pet_logger.dart';
 import 'tt_api.dart';
 import 'app_paths.dart';
 
+class _NewerDatabaseSchema implements Exception {
+  const _NewerDatabaseSchema(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// 单日事实（结构化，供画像/召回使用）。
 class DailyFact {
   DailyFact({
@@ -47,9 +56,16 @@ class DailyFact {
 /// - memories    语义记忆：经审核的长期记忆（偏好/习惯/目标/事件）
 /// - key_value   元信息（迁移标记等）
 class PetDb {
-  PetDb._();
+  PetDb({String? pathOverride, bool migrateLegacy = true})
+    : _pathOverride = pathOverride,
+      _migrateLegacy = migrateLegacy;
 
-  static final PetDb instance = PetDb._();
+  static final PetDb instance = PetDb();
+
+  static const schemaVersion = 2;
+
+  final String? _pathOverride;
+  final bool _migrateLegacy;
 
   Database? _db;
 
@@ -62,23 +78,79 @@ class PetDb {
   }
 
   String get path {
-    return AppPaths.memoryFile.path;
+    return _pathOverride ?? AppPaths.memoryFile.path;
   }
 
   void init() {
     if (_db != null) return;
     try {
-      final f = File(path);
-      f.parent.createSync(recursive: true);
-      _db = sqlite3.open(path);
-      db.execute('PRAGMA journal_mode=WAL');
-      db.execute('PRAGMA synchronous=NORMAL');
-      db.execute('PRAGMA foreign_keys=ON');
-      _createSchema();
-      _migrateFromMemJson();
+      _openAndMigrate();
       PetLog.i('db: init ok path=$path');
     } catch (e) {
       PetLog.e('db: init error: $e');
+      _db?.close();
+      _db = null;
+      if (e is _NewerDatabaseSchema) return;
+      final backup = _backupBrokenDatabase();
+      try {
+        _openAndMigrate();
+        PetLog.i('db: recovered with a fresh database backup=$backup');
+      } catch (recoveryError) {
+        PetLog.e('db: recovery error: $recoveryError');
+        _db?.close();
+        _db = null;
+      }
+    }
+  }
+
+  void _openAndMigrate() {
+    final f = File(path);
+    f.parent.createSync(recursive: true);
+    _db = sqlite3.open(path);
+    db.execute('PRAGMA journal_mode=WAL');
+    db.execute('PRAGMA synchronous=NORMAL');
+    db.execute('PRAGMA foreign_keys=ON');
+    final integrity = db.select('PRAGMA quick_check').first.values.first;
+    if (integrity != 'ok') throw StateError('SQLite quick_check: $integrity');
+    _migrateSchema();
+    if (_migrateLegacy) _migrateFromMemJson();
+  }
+
+  void _migrateSchema() {
+    final current = db.userVersion;
+    if (current > schemaVersion) {
+      throw _NewerDatabaseSchema(
+        'Database schema $current is newer than supported $schemaVersion',
+      );
+    }
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      _createSchema();
+      db.userVersion = schemaVersion;
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  String? _backupBrokenDatabase() {
+    final source = File(path);
+    if (!source.existsSync()) return null;
+    final stamp = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+    final backupPath = '$path.corrupt-$stamp';
+    try {
+      source.renameSync(backupPath);
+      for (final suffix in const ['-wal', '-shm']) {
+        final sidecar = File('$path$suffix');
+        if (sidecar.existsSync()) {
+          sidecar.renameSync('$backupPath$suffix');
+        }
+      }
+      return backupPath;
+    } catch (error) {
+      PetLog.e('db: failed to preserve corrupt database: $error');
+      return null;
     }
   }
 
@@ -118,6 +190,19 @@ class PetDb {
       'CREATE TABLE IF NOT EXISTS key_value('
       'k TEXT PRIMARY KEY,'
       'v TEXT)',
+    );
+    db.execute(
+      'CREATE TABLE IF NOT EXISTS proactive_events('
+      'id INTEGER PRIMARY KEY AUTOINCREMENT,'
+      'trigger_id TEXT NOT NULL,'
+      'label TEXT NOT NULL,'
+      'reason TEXT NOT NULL,'
+      'state TEXT NOT NULL,'
+      'ts TEXT NOT NULL)',
+    );
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_proactive_events_id '
+      'ON proactive_events(id)',
     );
   }
 
@@ -331,6 +416,20 @@ class PetDb {
     db.execute('UPDATE memories SET active = 0 WHERE id = ?', [id]);
   }
 
+  void updateMemory(
+    int id, {
+    required String content,
+    required String category,
+    required int importance,
+  }) {
+    if (_db == null || content.trim().isEmpty) return;
+    db.execute(
+      'UPDATE memories SET content = ?, category = ?, importance = ? '
+      'WHERE id = ? AND active = 1',
+      [content.trim(), category, importance.clamp(1, 5), id],
+    );
+  }
+
   /// 召回：先按子串匹配，不足再按重要性补足（本地小规模用 LIKE 足够）。
   List<Map<String, Object?>> searchMemories(String query, {int limit = 3}) {
     final q = query.trim();
@@ -385,6 +484,62 @@ class PetDb {
       PetLog.i('db: memories cleared');
     } catch (e) {
       PetLog.e('db: clearMemories error: $e');
+    }
+  }
+
+  // ---- 主动交互审计与 Agent 状态 ----
+
+  void recordProactiveEvent({
+    required String triggerId,
+    required String label,
+    required String reason,
+    String state = 'fired',
+    DateTime? at,
+  }) {
+    if (_db == null) return;
+    db.execute(
+      'INSERT INTO proactive_events(trigger_id, label, reason, state, ts) '
+      'VALUES (?, ?, ?, ?, ?)',
+      [
+        triggerId,
+        label,
+        reason,
+        state,
+        (at ?? DateTime.now()).toIso8601String(),
+      ],
+    );
+  }
+
+  List<Map<String, Object?>> recentProactiveEvents({int limit = 8}) {
+    if (_db == null) return const [];
+    return db
+        .select(
+          'SELECT id, trigger_id, label, reason, state, ts '
+          'FROM proactive_events ORDER BY id DESC LIMIT ?',
+          [limit],
+        )
+        .map((row) => Map<String, Object?>.from(row))
+        .toList();
+  }
+
+  void setAgentState(String state, String detail, {DateTime? at}) {
+    setKv(
+      'agent_runtime',
+      jsonEncode({
+        'state': state,
+        'detail': detail,
+        'updatedAt': (at ?? DateTime.now()).toIso8601String(),
+      }),
+    );
+  }
+
+  Map<String, dynamic>? agentState() {
+    final raw = getKv('agent_runtime');
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
     }
   }
 

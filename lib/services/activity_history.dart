@@ -8,6 +8,15 @@ import 'app_paths.dart';
 import 'pet_config.dart';
 import 'pet_logger.dart';
 
+class _NewerActivitySchema implements Exception {
+  const _NewerActivitySchema(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 enum ActivityDecision { active, idle, excluded }
 
 class ActivitySnapshot {
@@ -123,6 +132,7 @@ class ActivityHistory {
       _provider = provider;
 
   static final ActivityHistory instance = ActivityHistory();
+  static const schemaVersion = 1;
   static const MethodChannel _channel = MethodChannel('amadeus/activity');
   static const Duration pollInterval = Duration(seconds: 10);
 
@@ -147,13 +157,48 @@ class ActivityHistory {
 
   void init() {
     if (_db != null) return;
+    try {
+      _openAndMigrate();
+    } catch (error) {
+      PetLog.e('activity: database init failed: $error');
+      _db?.close();
+      _db = null;
+      if (error is _NewerActivitySchema) return;
+      final backup = _backupBrokenDatabase();
+      _openAndMigrate();
+      PetLog.i('activity: recovered with fresh database backup=$backup');
+    }
+  }
+
+  void _openAndMigrate() {
     final file = File(path);
     file.parent.createSync(recursive: true);
     _db = sqlite3.open(path);
     _database
       ..execute('PRAGMA journal_mode=WAL')
       ..execute('PRAGMA synchronous=NORMAL')
-      ..execute('PRAGMA busy_timeout=5000')
+      ..execute('PRAGMA busy_timeout=5000');
+    final integrity = _database.select('PRAGMA quick_check').first.values.first;
+    if (integrity != 'ok') throw StateError('SQLite quick_check: $integrity');
+    if (_database.userVersion > schemaVersion) {
+      throw _NewerActivitySchema(
+        'Activity schema ${_database.userVersion} is newer than supported '
+        '$schemaVersion',
+      );
+    }
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      _createSchema();
+      _database.userVersion = schemaVersion;
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  void _createSchema() {
+    _database
       ..execute(
         'CREATE TABLE IF NOT EXISTS usage_sessions('
         'id INTEGER PRIMARY KEY AUTOINCREMENT,'
@@ -188,6 +233,19 @@ class ActivityHistory {
         'CREATE INDEX IF NOT EXISTS idx_activity_events_date '
         'ON activity_events(date, captured_at)',
       );
+  }
+
+  String? _backupBrokenDatabase() {
+    final source = File(path);
+    if (!source.existsSync()) return null;
+    final stamp = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+    final backupPath = '$path.corrupt-$stamp';
+    source.renameSync(backupPath);
+    for (final suffix in const ['-wal', '-shm']) {
+      final sidecar = File('$path$suffix');
+      if (sidecar.existsSync()) sidecar.renameSync('$backupPath$suffix');
+    }
+    return backupPath;
   }
 
   void start() {

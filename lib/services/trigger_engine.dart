@@ -1,9 +1,22 @@
 import 'dart:async';
 
 import 'pet_config.dart';
+import 'pet_db.dart';
 import 'pet_logger.dart';
 import 'pet_memory.dart';
 import 'tt_api.dart';
+
+class TriggerDecision {
+  const TriggerDecision({
+    required this.id,
+    required this.label,
+    required this.prompt,
+  });
+
+  final String id;
+  final String label;
+  final String prompt;
+}
 
 /// 主动交互触发引擎：每 60 秒基于内置活动感知 + 动态配置评估一次，
 /// 满足条件且未超频率限制时，回调 [onProactive] 发起主动聊天。
@@ -53,6 +66,7 @@ class TriggerEngine {
   void start() {
     if (_timer != null) return;
     PetLog.i('trigger: engine start (tick=60s)');
+    PetDb.instance.setAgentState('observing', '正在观察活动节奏');
     _timer = Timer.periodic(const Duration(seconds: 60), (_) => _tick());
     // 启动后立即评估一次：尽快进入/退出休眠判断，避免启动问候撞上用户离开
     unawaited(_tick());
@@ -61,6 +75,7 @@ class TriggerEngine {
   void stop() {
     _timer?.cancel();
     _timer = null;
+    PetDb.instance.setAgentState('paused', '主动触发引擎已停止');
   }
 
   /// 用户主动互动（发消息/点桌宠）时强制唤醒。
@@ -74,6 +89,7 @@ class TriggerEngine {
       'trigger: sleep enter idle=$idleMin (stop proactive, save tokens)',
     );
     onSleepChanged?.call(true);
+    PetDb.instance.setAgentState('sleeping', '空闲 $idleMin 分钟，已暂停在线调用');
   }
 
   void _exitSleep() {
@@ -82,6 +98,7 @@ class TriggerEngine {
     _idleStreakTicks = 0;
     PetLog.i('trigger: sleep exit (user active again)');
     onSleepChanged?.call(false);
+    PetDb.instance.setAgentState('observing', '用户已恢复活动');
   }
 
   Future<void> _tick() async {
@@ -198,7 +215,7 @@ class TriggerEngine {
       final maxPerHour = busy ? (cfg.maxPerHour / 2).ceil() : cfg.maxPerHour;
       if (_hourCount >= maxPerHour) return;
 
-      final prompt = _evaluate(
+      final decision = _evaluate(
         now,
         hourChanged,
         idleReturned,
@@ -206,13 +223,23 @@ class TriggerEngine {
         busy,
         hasData,
       );
-      if (prompt == null) return;
+      if (decision == null) return;
 
       _lastProactiveAt = now;
       _hourCount++;
-      PetLog.i('trigger: fire hourCount=$_hourCount prompt=${_clip(prompt)}');
-      PetMemory.instance.record('system', '触发主动聊天：$prompt');
-      onProactive?.call(prompt);
+      PetLog.i(
+        'trigger: fire id=${decision.id} hourCount=$_hourCount '
+        'prompt=${_clip(decision.prompt)}',
+      );
+      PetDb.instance.recordProactiveEvent(
+        triggerId: decision.id,
+        label: decision.label,
+        reason: decision.prompt,
+        at: now,
+      );
+      PetDb.instance.setAgentState('thinking', '由「${decision.label}」触发主动对话');
+      PetMemory.instance.record('system', '触发主动聊天：${decision.prompt}');
+      onProactive?.call(decision.prompt);
     } catch (e) {
       PetLog.e('trigger: tick error: $e');
     } finally {
@@ -220,7 +247,7 @@ class TriggerEngine {
     }
   }
 
-  String? _evaluate(
+  TriggerDecision? _evaluate(
     DateTime now,
     bool hourChanged,
     bool idleReturned,
@@ -230,21 +257,37 @@ class TriggerEngine {
   ) {
     // 1) 整点
     if (cfg.triggerHourly && hourChanged && now.minute <= 2) {
-      return '现在是 ${now.hour} 点，自然地和用户打个招呼或关心一句（简短，可结合观测语料，别生硬报数）。';
+      return TriggerDecision(
+        id: 'hourly',
+        label: '整点问候',
+        prompt: '现在是 ${now.hour} 点，自然地和用户打个招呼或关心一句（简短，可结合观测语料，别生硬报数）。',
+      );
     }
 
     // 2) 深夜（画像感知：常熬夜的用户更坚定地催休息）
     if (cfg.triggerLateNight && (now.hour >= 23 || now.hour < 5)) {
       final p = PetMemory.instance.profile();
       if ((p['lateNightRatio'] as double? ?? 0) > 0.4) {
-        return '时间不早了（用户最近常熬夜），温柔但更坚定地催用户早点休息（简短自然，可结合观测语料，别生硬报数）。';
+        return const TriggerDecision(
+          id: 'late_night',
+          label: '深夜关心',
+          prompt: '时间不早了（用户最近常熬夜），温柔但更坚定地催用户早点休息（简短自然，可结合观测语料，别生硬报数）。',
+        );
       }
-      return '时间不早了，温柔地提醒用户注意休息（简短自然，别数叨）。';
+      return const TriggerDecision(
+        id: 'late_night',
+        label: '深夜关心',
+        prompt: '时间不早了，温柔地提醒用户注意休息（简短自然，别数叨）。',
+      );
     }
 
     // 2.5) 空闲后回来（依赖数据）
     if (hasData && cfg.triggerIdleReturn && idleReturned) {
-      return '用户刚离开又回来了，自然地打个招呼或关心一句（简短，可结合观测语料，别生硬报数）。';
+      return const TriggerDecision(
+        id: 'idle_return',
+        label: '回来问候',
+        prompt: '用户刚离开又回来了，自然地打个招呼或关心一句（简短，可结合观测语料，别生硬报数）。',
+      );
     }
 
     // 3) 长时间连续使用（依赖数据）
@@ -254,7 +297,11 @@ class TriggerEngine {
       if (_longSessionNotifiedAt == null ||
           now.difference(_longSessionNotifiedAt!) > const Duration(hours: 2)) {
         _longSessionNotifiedAt = now;
-        return '用户好像连续用了很久，自然地关心一句要不要起来活动一下（可结合观测语料，别生硬报数）。';
+        return const TriggerDecision(
+          id: 'long_session',
+          label: '久坐提醒',
+          prompt: '用户好像连续用了很久，自然地关心一句要不要起来活动一下（可结合观测语料，别生硬报数）。',
+        );
       }
     }
 
@@ -263,7 +310,11 @@ class TriggerEngine {
       final delta = tt.switches - _lastSwitches;
       _lastSwitches = tt.switches;
       if (delta >= 8) {
-        return '用户刚才疯狂切换窗口，轻轻吐槽或关心一句（自然一点，可结合观测语料）。';
+        return const TriggerDecision(
+          id: 'app_switch_spike',
+          label: '切换过于频繁',
+          prompt: '用户刚才疯狂切换窗口，轻轻吐槽或关心一句（自然一点，可结合观测语料）。',
+        );
       }
     } else if (hasData) {
       _lastSwitches = tt.switches;
@@ -274,7 +325,11 @@ class TriggerEngine {
       if (_focusNotifiedAt == null ||
           now.difference(_focusNotifiedAt!) > const Duration(hours: 2)) {
         _focusNotifiedAt = now;
-        return '用户盯着同一个应用很久了，自然地提醒一句起来活动一下（简短，可结合观测语料，别生硬报数）。';
+        return const TriggerDecision(
+          id: 'focus_reminder',
+          label: '专注提醒',
+          prompt: '用户盯着同一个应用很久了，自然地提醒一句起来活动一下（简短，可结合观测语料，别生硬报数）。',
+        );
       }
     }
 
@@ -283,14 +338,22 @@ class TriggerEngine {
       final mem = PetMemory.instance.topMemory(excludeId: _lastNudgedMemoryId);
       if (mem != null && (mem['importance'] as int? ?? 0) >= 3) {
         _lastNudgedMemoryId = mem['id'] as int? ?? -1;
-        return '用户之前提到过：${mem['content']}。自然地关心一下进展（简短，别生硬转场，可结合观测语料）。';
+        return TriggerDecision(
+          id: 'memory_nudge',
+          label: '记忆关心',
+          prompt: '用户之前提到过：${mem['content']}。自然地关心一下进展（简短，别生硬转场，可结合观测语料）。',
+        );
       }
     }
 
     // 5) 随机搭话（忙时不打扰）
     if (cfg.triggerRandomNudge && !busy) {
       if (_lastProactiveAt == null) {
-        return '主动找个话题和用户聊两句（简短自然，像朋友）。';
+        return const TriggerDecision(
+          id: 'random_nudge',
+          label: '轻松搭话',
+          prompt: '主动找个话题和用户聊两句（简短自然，像朋友）。',
+        );
       }
       final rnd = (now.millisecondsSinceEpoch % 1000) / 1000.0;
       if (rnd < cfg.randomNudgeChance) {
@@ -299,7 +362,11 @@ class TriggerEngine {
           '像朋友一样问用户一个问题。',
           '聊聊最近在读的书、音乐或生活日常。',
         ];
-        return topics[now.second % topics.length];
+        return TriggerDecision(
+          id: 'random_nudge',
+          label: '轻松搭话',
+          prompt: topics[now.second % topics.length],
+        );
       }
     }
     return null;

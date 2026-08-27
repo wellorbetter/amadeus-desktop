@@ -1,3 +1,4 @@
+import 'pet_config.dart';
 import 'pet_db.dart';
 import 'pet_logger.dart';
 import 'tt_api.dart';
@@ -9,9 +10,14 @@ import 'tt_api.dart';
 /// - 用户画像：由 daily_facts 计算的规律摘要
 /// 记忆审核：用户消息含稳定信息信号时，由 LLM 提取并写入语义记忆。
 class PetMemory {
-  PetMemory._();
+  PetMemory({PetDb? database, PetConfig? config})
+    : _database = database ?? PetDb.instance,
+      _config = config ?? PetConfig.instance;
 
-  static final PetMemory instance = PetMemory._();
+  static final PetMemory instance = PetMemory();
+
+  final PetDb _database;
+  final PetConfig _config;
 
   static const int _msgCap = 60;
   static const int _summaryLen = 6;
@@ -23,18 +29,18 @@ class PetMemory {
     r'|我的|我对象|我朋友|我家人|别忘|记住|以后|目标|想买|想去|想学|在学',
   );
 
-  void load() => PetDb.instance.init();
+  void load() => _database.init();
 
   // ---- 工作记忆 ----
 
   void record(String role, String content) {
     if (content.isEmpty) return;
-    PetDb.instance.addMessage(role, content);
-    PetDb.instance.trimMessages(_msgCap);
+    _database.addMessage(role, content);
+    _database.trimMessages(_msgCap);
   }
 
   String summary() {
-    final rows = PetDb.instance.recentMessages(_summaryLen);
+    final rows = _database.recentMessages(_summaryLen);
     if (rows.isEmpty) return '（暂无历史对话）';
     final sb = StringBuffer();
     for (final r in rows) {
@@ -53,12 +59,12 @@ class PetMemory {
   void absorbFactsFrom(TtApi tt) {
     if (!tt.hasHistory) return;
     for (final d in tt.history) {
-      PetDb.instance.upsertDailyFact(d);
+      _database.upsertDailyFact(d);
     }
   }
 
   String factsSummary() {
-    final days = PetDb.instance.dailyFactsRecent(_factsDays);
+    final days = _database.dailyFactsRecent(_factsDays);
     if (days.isEmpty) return '';
     final sb = StringBuffer('近期状态：\n');
     for (final d in days) {
@@ -102,8 +108,9 @@ class PetMemory {
       };
       final candidate = it['category']?.toString();
       final cat = categories.contains(candidate) ? candidate! : 'fact';
-      if (PetDb.instance.memoryExists(content)) continue;
-      PetDb.instance.addMemory(
+      if (_config.memoryDisabledCategories.contains(cat)) continue;
+      if (_database.memoryExists(content)) continue;
+      _database.addMemory(
         content,
         category: cat,
         importance: importance,
@@ -119,7 +126,7 @@ class PetMemory {
   /// 按当前话题召回相关长期记忆（用于 system prompt）。
   String relevantMemories(String query, {int limit = 3}) {
     if (query.isEmpty) return '';
-    final rows = PetDb.instance.searchMemories(query, limit: limit);
+    final rows = _database.searchMemories(query, limit: limit);
     if (rows.isEmpty) return '';
     final sb = StringBuffer('长期记忆（可能相关，自然融入，不要直白引用）：\n');
     for (final r in rows) {
@@ -130,17 +137,17 @@ class PetMemory {
 
   /// 重要性最高的记忆（主动触发用）。
   Map<String, Object?>? topMemory({int excludeId = -1}) =>
-      PetDb.instance.topMemory(excludeId: excludeId);
+      _database.topMemory(excludeId: excludeId);
 
-  int memoryCount() => PetDb.instance.memoryCount();
+  int memoryCount() => _database.memoryCount();
 
   List<Map<String, Object?>> recentMemoryRows({int limit = 8}) =>
-      PetDb.instance.recentMemoryRows(limit: limit);
+      _database.recentMemoryRows(limit: limit);
 
   // ---- 用户画像 ----
 
   Map<String, dynamic> profile() {
-    final days = PetDb.instance.dailyFactsRecent(7);
+    final days = _database.dailyFactsRecent(7);
     if (days.isEmpty) return {'has': false};
     var totalActive = 0;
     var lateNights = 0;

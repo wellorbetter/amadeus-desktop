@@ -5,6 +5,23 @@ import 'package:timepet/services/activity_history.dart';
 import 'package:timepet/services/pet_config.dart';
 
 void main() {
+  test('activity database preserves corrupt file and recreates schema', () {
+    final root = Directory.systemTemp.createTempSync('amadeus-activity-test-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final path = '${root.path}/activity.db';
+    File(path).writeAsStringSync('broken sqlite');
+    final history = ActivityHistory(pathOverride: path)..init();
+    addTearDown(history.close);
+
+    expect(history.initialized, isTrue);
+    expect(
+      root.listSync().whereType<File>().any(
+        (file) => file.path.contains('activity.db.corrupt-'),
+      ),
+      isTrue,
+    );
+  });
+
   late Directory root;
   late ActivityHistory history;
 

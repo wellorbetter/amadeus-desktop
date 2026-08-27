@@ -70,6 +70,9 @@ class PetConfig {
     'KeePass',
   ];
 
+  // Categories the user does not allow automatic memory extraction to store.
+  List<String> memoryDisabledCategories = const [];
+
   /// Compatibility for pre-Agent configuration and callers.
   bool get timeTraceEnabled => activityAwarenessEnabled;
   set timeTraceEnabled(bool value) => activityAwarenessEnabled = value;
@@ -149,11 +152,11 @@ class PetConfig {
         'excludedApps': ['1Password', 'Bitwarden', 'KeePass'],
       },
     },
+    'memory': {'disabledCategories': <String>[]},
     'sleep': {'enabled': true, 'idleMinutes': 15, 'adaptiveFrequency': true},
     'ai': {
       'enabled': true,
       'authMode': 'openai_api_key',
-      'apiKey': '',
       'baseUrl': 'https://api.openai.com/v1',
       'model': 'gpt-5.6-luna',
       'temperature': 0.8,
@@ -173,6 +176,9 @@ class PetConfig {
   /// 读取配置（文件不存在则写入默认值）。
   void load() {
     try {
+      // Secure credentials live outside config.json. Preserve the hydrated
+      // runtime value across config hot reloads once plaintext migration is done.
+      final hydratedApiKey = aiApiKey;
       final f = file;
       if (!f.existsSync()) {
         f.parent.createSync(recursive: true);
@@ -183,10 +189,29 @@ class PetConfig {
       final json = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
       _apply(_defaults());
       _apply(json);
+      final ai = json['ai'];
+      if (ai is Map<String, dynamic> &&
+          !ai.containsKey('apiKey') &&
+          hydratedApiKey.isNotEmpty) {
+        aiApiKey = hydratedApiKey;
+      }
       _lastLoad = f.statSync().modified;
       revision.value++;
-    } catch (e) {
-      // 配置损坏时保持默认值
+    } catch (error) {
+      final hydratedApiKey = aiApiKey;
+      final f = file;
+      if (f.existsSync()) {
+        final stamp = DateTime.now().toUtc().toIso8601String().replaceAll(
+          ':',
+          '-',
+        );
+        try {
+          f.renameSync('${f.path}.corrupt-$stamp');
+        } catch (_) {}
+      }
+      _apply(_defaults());
+      aiApiKey = hydratedApiKey;
+      save();
     }
   }
 
@@ -271,6 +296,7 @@ class PetConfig {
         'excludedApps': activityExcludedApps,
       },
     },
+    'memory': {'disabledCategories': memoryDisabledCategories},
     'sleep': {
       'enabled': sleepEnabled,
       'idleMinutes': sleepIdleMinutes,
@@ -279,7 +305,6 @@ class PetConfig {
     'ai': {
       'enabled': aiEnabled,
       'authMode': aiAuthMode,
-      'apiKey': aiApiKey,
       'baseUrl': aiBaseUrl,
       'model': aiModel,
       'temperature': aiTemperature,
@@ -392,6 +417,25 @@ class PetConfig {
       sleepEnabled = sl['enabled'] as bool? ?? true;
       sleepIdleMinutes = _number(sl['idleMinutes'], 15).clamp(1, 1440).toInt();
       adaptiveFrequency = sl['adaptiveFrequency'] as bool? ?? true;
+    }
+    final memory = json['memory'];
+    if (memory is Map<String, dynamic>) {
+      const supported = {
+        'preference',
+        'habit',
+        'goal',
+        'fact',
+        'event',
+        'relationship',
+      };
+      final disabled = memory['disabledCategories'];
+      memoryDisabledCategories = disabled is List
+          ? disabled
+                .map((item) => item.toString())
+                .where(supported.contains)
+                .toSet()
+                .toList(growable: false)
+          : const [];
     }
     final ai = json['ai'];
     if (ai is Map<String, dynamic>) {

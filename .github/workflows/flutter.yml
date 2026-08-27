@@ -28,6 +28,8 @@ jobs:
         run: cargo fmt --manifest-path rust/Cargo.toml -- --check
       - name: Test Rust activity core
         run: cargo test --manifest-path rust/Cargo.toml
+      - name: Lint Rust activity core
+        run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
       - name: Verify formatting
         run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze

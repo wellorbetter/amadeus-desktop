@@ -7,6 +7,7 @@ import 'package:flutter_acrylic/flutter_acrylic.dart' as acrylic;
 import 'app.dart';
 import 'services/pet_config.dart';
 import 'services/pet_logger.dart';
+import 'services/pet_secret_store.dart';
 import 'services/pet_window.dart';
 import 'ui/settings_window.dart';
 
@@ -31,6 +32,9 @@ void main() async {
       }
       PetLog.i('main: windowId=$windowId args=$windowArgs');
 
+      PetConfig.instance.load();
+      await PetSecretStore.instance.hydrate(PetConfig.instance);
+
       if (windowArgs.contains('settings')) {
         // 设置窗口：普通不透明大窗口，独立运行
         runApp(
@@ -40,7 +44,6 @@ void main() async {
       }
 
       // 桌宠窗口：透明 + 托盘 + 右下角贴合
-      PetConfig.instance.load();
       await acrylic.Window.initialize();
       await acrylic.Window.setEffect(effect: acrylic.WindowEffect.disabled);
       PetLog.i('main: acrylic ready');

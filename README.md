@@ -66,7 +66,8 @@ Live2D 模型与 `soul.md` 分离：更换形象不会偷偷改写人格，修�
 
 | 数据 | 默认位置 | 是否发送给 AI 服务 |
 | --- | --- | --- |
-| Live2D 模型、人格文件、API Key | 本机用户数据目录 | 否 |
+| Live2D 模型、人格文件 | 本机用户数据目录 | 否 |
+| API Key | Windows Credential/受保护存储、macOS Keychain | 否 |
 | 窗口标题、截图、音频、键盘输入、文件路径 | 不采集 | 否 |
 | 前台应用、空闲时长原始事件 | 本机独立数据库，默认 48 小时 | 否 |
 | 用户消息、必要的近期对话 | 本机 + 本次请求 | 是 |
@@ -97,6 +98,8 @@ API Key 可以在“能力与人格”中配置，也可使用环境变量：
 
 ChatGPT / Codex 订阅登录不能直接作为第三方桌面应用的 API 凭据。
 
+旧版本写在 `config.json` 的 API Key 会在首次启动时迁移到系统安全存储，随后从配置文件清除。设置页的“为什么主动开口”会显示 Agent 当前状态与实际触发原因；“记忆与隐私”可以按类型禁止自动记忆，并逐条编辑或删除长期记忆。
+
 ## 构建
 
 环境要求：Flutter stable 与 Rust stable。Windows 需要 Visual Studio Desktop C++，macOS 需要当前 Xcode；构建脚本会为当前 macOS 架构准备对应的 Rust target。
@@ -114,6 +117,8 @@ flutter build macos --release
 ```
 
 GitHub Actions 会分别在 Windows 和 macOS runner 上生成构建产物。CI 的 macOS artifact 是未公证的开发产物；公开分发仍需使用 Apple Developer ID 签名并提交 notarization，否则 Gatekeeper 会提示无法验证开发者。
+
+发版前的签名、权限和真机验证见 [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)。
 
 ## 目录
 
