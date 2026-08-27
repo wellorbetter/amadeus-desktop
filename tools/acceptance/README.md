@@ -26,8 +26,10 @@ separate result. Windows and Ubuntu produce native desktop recordings.
   build/acceptance/amadeus-ubuntu.mp4
 ```
 
-The scripts require Xvfb, Openbox, and FFmpeg. CI treats both startup and the
-1280×800 H.264 recording as required checks.
+The scripts require Xvfb, Openbox, and FFmpeg. The Linux smoke first exercises
+the release binary's native X11 activity probe, then starts the ordinary
+Flutter entry point. CI treats the sensor probe, startup, and 1280×800 H.264
+recording as required checks.
 
 ## Windows
 
