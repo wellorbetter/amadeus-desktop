@@ -49,7 +49,7 @@ void main() {
     final config = PetConfig(pathOverride: '${dir.path}/config.json');
     await tester.pumpWidget(MaterialApp(home: SettingsPage(config: config)));
 
-    await tester.tap(find.text('主动互动'));
+    await tester.tap(find.text('主动性'));
     await tester.pumpAndSettle();
 
     expect(find.text('健康关心'), findsOneWidget);
