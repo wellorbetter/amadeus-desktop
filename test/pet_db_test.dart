@@ -77,10 +77,9 @@ void main() {
 
     expect(database.initialized, isFalse);
     expect(
-      root
-          .listSync()
-          .whereType<File>()
-          .where((file) => file.path.contains('.corrupt-')),
+      root.listSync().whereType<File>().where(
+        (file) => file.path.contains('.corrupt-'),
+      ),
       isEmpty,
     );
     final unchanged = sqlite3.open(path);
