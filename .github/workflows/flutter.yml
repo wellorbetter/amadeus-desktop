@@ -30,14 +30,6 @@ jobs:
         run: cargo test --manifest-path rust/Cargo.toml
       - name: Lint Rust activity core
         run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
-      - name: Format semantic-memory regression test
-        run: dart format test/pet_memory_policy_test.dart
-      - name: Upload formatted semantic-memory test
-        uses: actions/upload-artifact@v4
-        with:
-          name: formatted-semantic-memory-test
-          path: test/pet_memory_policy_test.dart
-          if-no-files-found: error
       - name: Verify formatting
         run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze

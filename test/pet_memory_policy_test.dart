@@ -28,30 +28,27 @@ void main() {
     expect(memory.recentMemoryRows().single['content'], '偏好安静的 UI');
   });
 
-  test(
-    'trigger audit metadata never enters conversational working memory',
-    () {
-      final root = Directory.systemTemp.createTempSync('amadeus-memory-test-');
-      addTearDown(() => root.deleteSync(recursive: true));
-      final database = PetDb(
-        pathOverride: '${root.path}/mem.db',
-        migrateLegacy: false,
-      )..init();
-      addTearDown(database.dispose);
-      final config = PetConfig(pathOverride: '${root.path}/config.json');
-      final memory = PetMemory(database: database, config: config);
+  test('trigger audit metadata never enters conversational working memory', () {
+    final root = Directory.systemTemp.createTempSync('amadeus-memory-test-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final database = PetDb(
+      pathOverride: '${root.path}/mem.db',
+      migrateLegacy: false,
+    )..init();
+    addTearDown(database.dispose);
+    final config = PetConfig(pathOverride: '${root.path}/config.json');
+    final memory = PetMemory(database: database, config: config);
 
-      memory.record('user', '继续优化这个项目');
-      memory.record('system', '触发主动聊天：整点问候');
-      database.addMessage('system', '旧版本遗留的内部触发记录');
-      memory.record('assistant', '好，我们继续。');
+    memory.record('user', '继续优化这个项目');
+    memory.record('system', '触发主动聊天：整点问候');
+    database.addMessage('system', '旧版本遗留的内部触发记录');
+    memory.record('assistant', '好，我们继续。');
 
-      expect(memory.summary(), contains('用户：继续优化这个项目'));
-      expect(memory.summary(), contains('Amadeus：好，我们继续。'));
-      expect(memory.summary(), isNot(contains('触发主动聊天')));
-      expect(memory.summary(), isNot(contains('内部触发记录')));
-    },
-  );
+    expect(memory.summary(), contains('用户：继续优化这个项目'));
+    expect(memory.summary(), contains('Amadeus：好，我们继续。'));
+    expect(memory.summary(), isNot(contains('触发主动聊天')));
+    expect(memory.summary(), isNot(contains('内部触发记录')));
+  });
 
   test('semantic recall excludes unrelated high-importance memories', () {
     final root = Directory.systemTemp.createTempSync('amadeus-memory-test-');
@@ -63,28 +60,12 @@ void main() {
     addTearDown(database.dispose);
     final config = PetConfig(pathOverride: '${root.path}/config.json');
     final memory = PetMemory(database: database, config: config);
-    database.addMemory(
-      '用户偏好安静、低干扰的界面',
-      importance: 5,
-    );
-    database.addMemory(
-      '用户计划学习 Rust 异步编程',
-      category: 'goal',
-      importance: 4,
-    );
+    database.addMemory('用户偏好安静、低干扰的界面', importance: 5);
+    database.addMemory('用户计划学习 Rust 异步编程', category: 'goal', importance: 4);
 
     expect(memory.relevantMemories('今天天气如何'), isEmpty);
-    expect(
-      memory.relevantMemories('把这个界面做得更安静一些'),
-      contains('低干扰的界面'),
-    );
-    expect(
-      memory.relevantMemories('继续学习 Rust 异步部分'),
-      contains('Rust 异步编程'),
-    );
-    expect(
-      memory.relevantMemories('我的目标是什么'),
-      contains('Rust 异步编程'),
-    );
+    expect(memory.relevantMemories('把这个界面做得更安静一些'), contains('低干扰的界面'));
+    expect(memory.relevantMemories('继续学习 Rust 异步部分'), contains('Rust 异步编程'));
+    expect(memory.relevantMemories('我的目标是什么'), contains('Rust 异步编程'));
   });
 }
