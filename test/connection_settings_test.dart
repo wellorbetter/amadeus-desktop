@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:timepet/services/pet_config.dart';
+import 'package:timepet/services/activity_history.dart';
 import 'package:timepet/ui/settings_panel.dart';
 
 void main() {
@@ -37,6 +38,32 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('数据边界'), findsOneWidget);
     expect(find.text('本地记忆'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('activity workspace exposes stream state and source controls', (
+    tester,
+  ) async {
+    final dir = Directory.systemTemp.createTempSync('amadeus-activity-ui-');
+    final config = PetConfig(pathOverride: '${dir.path}/config.json');
+    final history = ActivityHistory(pathOverride: '${dir.path}/activity.db');
+    addTearDown(() {
+      history.close();
+      dir.deleteSync(recursive: true);
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SettingsPage(config: config, activityHistory: history),
+      ),
+    );
+    await tester.tap(find.text('活动工作台'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Rust Core v1'), findsOneWidget);
+    expect(find.text('事件管线'), findsOneWidget);
+    expect(find.text('采集与保留'), findsOneWidget);
+    expect(find.text('排除应用'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 }

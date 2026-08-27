@@ -9,11 +9,13 @@ import '../services/pet_config.dart';
 import '../services/pet_db.dart';
 import '../services/pet_logger.dart';
 import '../services/pet_memory.dart';
+import 'activity_workspace.dart';
 import 'amadeus_theme.dart';
 
 enum _SettingsSection {
   overview,
   appearance,
+  activity,
   interaction,
   intelligence,
   privacy,
@@ -23,6 +25,7 @@ extension on _SettingsSection {
   String get label => switch (this) {
     _SettingsSection.overview => 'Agent 概览',
     _SettingsSection.appearance => '形象与外观',
+    _SettingsSection.activity => '活动工作台',
     _SettingsSection.interaction => '主动性',
     _SettingsSection.intelligence => '能力与人格',
     _SettingsSection.privacy => '记忆与隐私',
@@ -31,6 +34,7 @@ extension on _SettingsSection {
   IconData get icon => switch (this) {
     _SettingsSection.overview => Icons.space_dashboard_outlined,
     _SettingsSection.appearance => Icons.palette_outlined,
+    _SettingsSection.activity => Icons.monitor_heart_outlined,
     _SettingsSection.interaction => Icons.notifications_active_outlined,
     _SettingsSection.intelligence => Icons.psychology_alt_outlined,
     _SettingsSection.privacy => Icons.shield_outlined,
@@ -39,6 +43,7 @@ extension on _SettingsSection {
   String get description => switch (this) {
     _SettingsSection.overview => '运行状态与关键入口',
     _SettingsSection.appearance => '本地形象、窗口和气泡',
+    _SettingsSection.activity => '观察状态、节奏投影与来源控制',
     _SettingsSection.interaction => '触发条件、频率和休眠',
     _SettingsSection.intelligence => '对话服务与人格边界',
     _SettingsSection.privacy => '本地数据、日志与系统行为',
@@ -46,10 +51,16 @@ extension on _SettingsSection {
 }
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, this.onClose, this.config});
+  const SettingsPage({
+    super.key,
+    this.onClose,
+    this.config,
+    this.activityHistory,
+  });
 
   final VoidCallback? onClose;
   final PetConfig? config;
+  final ActivityHistory? activityHistory;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -62,6 +73,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Timer? _commitTimer;
   bool _disposing = false;
   bool _apiKeyVisible = false;
+  bool _navCollapsed = false;
 
   final _baseUrl = TextEditingController();
   final _model = TextEditingController();
@@ -74,6 +86,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    _navCollapsed = cfg.settingsSidebarCollapsed;
     _syncControllers();
   }
 
@@ -235,8 +248,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _navigationRail() {
     final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      width: 224,
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      width: _navCollapsed ? 78 : 224,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 18, 14, 14),
         child: Column(
@@ -248,24 +263,42 @@ class _SettingsPageState extends State<SettingsPage> {
                   selected: item == _section,
                   icon: item.icon,
                   label: item.label,
+                  compact: _navCollapsed,
                   onTap: () => setState(() => _section = item),
                 ),
               ),
             const Spacer(),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: scheme.outlineVariant),
+            if (!_navCollapsed)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: scheme.outlineVariant),
+                ),
+                child: Text(
+                  'Rust 在落盘前过滤，Flutter 只消费本机短期事件流与投影视图。',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 12,
+                    height: 1.5,
+                  ),
+                ),
               ),
-              child: Text(
-                '活动感知已内置。原始事件短期保存，与长期记忆完全分离。',
-                style: TextStyle(
-                  color: scheme.onSurfaceVariant,
-                  fontSize: 12,
-                  height: 1.5,
+            const SizedBox(height: 8),
+            Tooltip(
+              message: _navCollapsed ? '展开侧边栏' : '收起侧边栏',
+              child: IconButton(
+                onPressed: () {
+                  setState(() => _navCollapsed = !_navCollapsed);
+                  cfg.settingsSidebarCollapsed = _navCollapsed;
+                  _commit();
+                },
+                icon: Icon(
+                  _navCollapsed
+                      ? Icons.keyboard_double_arrow_right_rounded
+                      : Icons.keyboard_double_arrow_left_rounded,
                 ),
               ),
             ),
@@ -299,38 +332,54 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Widget _content() {
-    return SingleChildScrollView(
-      key: ValueKey(_section),
-      padding: const EdgeInsets.fromLTRB(32, 28, 32, 44),
-      child: Align(
-        alignment: Alignment.topLeft,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 820),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _section.label,
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.018, 0),
+            end: Offset.zero,
+          ).animate(animation),
+          child: child,
+        ),
+      ),
+      child: SingleChildScrollView(
+        key: ValueKey(_section),
+        padding: const EdgeInsets.fromLTRB(32, 28, 32, 44),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 960),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _section.label,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _section.description,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                const SizedBox(height: 6),
+                Text(
+                  _section.description,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 24),
-              switch (_section) {
-                _SettingsSection.overview => _overview(),
-                _SettingsSection.appearance => _appearance(),
-                _SettingsSection.interaction => _interaction(),
-                _SettingsSection.intelligence => _intelligence(),
-                _SettingsSection.privacy => _privacy(),
-              },
-            ],
+                const SizedBox(height: 24),
+                switch (_section) {
+                  _SettingsSection.overview => _overview(),
+                  _SettingsSection.appearance => _appearance(),
+                  _SettingsSection.activity => _activity(),
+                  _SettingsSection.interaction => _interaction(),
+                  _SettingsSection.intelligence => _intelligence(),
+                  _SettingsSection.privacy => _privacy(),
+                },
+              ],
+            ),
           ),
         ),
       ),
@@ -386,7 +435,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     ? AmadeusTheme.mint
                     : scheme.outline,
                 onTap: () =>
-                    setState(() => _section = _SettingsSection.intelligence),
+                    setState(() => _section = _SettingsSection.activity),
               ),
             ];
             if (stacked) {
@@ -493,6 +542,14 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
     ],
+  );
+
+  Widget _activity() => ActivityWorkspace(
+    config: cfg,
+    excludedAppsController: _excludedApps,
+    onChanged: _commit,
+    onClear: _confirmClearActivity,
+    history: widget.activityHistory,
   );
 
   Widget _interaction() => Column(
@@ -608,66 +665,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _intelligence() => Column(
     children: [
-      _SettingsCard(
-        title: '观察能力',
-        subtitle: '能力提供短期上下文；只有记忆模块能决定哪些信息值得长期保留。',
-        child: Column(
-          children: [
-            _switchRow(
-              '活动感知',
-              '在本机记录前台应用和空闲时长；关闭后停止采集。',
-              cfg.activityAwarenessEnabled,
-              (value) {
-                cfg.activityAwarenessEnabled = value;
-                if (!value) cfg.activityAwarenessPaused = false;
-                _commit();
-              },
-            ),
-            _switchRow(
-              '暂时暂停',
-              '保留已有时间线，但不再收集新事件。托盘也可快速切换。',
-              cfg.activityAwarenessPaused,
-              cfg.activityAwarenessEnabled
-                  ? (value) {
-                      cfg.activityAwarenessPaused = value;
-                      _commit();
-                    }
-                  : null,
-            ),
-            _sliderRow(
-              '原始事件保留时间',
-              cfg.activityRetentionHours.toDouble(),
-              1,
-              168,
-              (value) {
-                cfg.activityRetentionHours = value.round();
-                _commit();
-              },
-              (value) => '${value.round()} 小时',
-            ),
-            _field(
-              label: '排除应用（逗号分隔）',
-              controller: _excludedApps,
-              hint: '1Password, Bitwarden, 银行客户端',
-              onChanged: (value) {
-                cfg.activityExcludedApps = value
-                    .split(RegExp(r'[,，\n]'))
-                    .map((item) => item.trim())
-                    .where((item) => item.isNotEmpty)
-                    .toList(growable: false);
-                _commit();
-              },
-            ),
-            const SizedBox(height: 12),
-            _InfoBanner(
-              icon: Icons.visibility_off_outlined,
-              text: '不采集截图、音频、窗口标题、文件路径或键盘输入内容。旧 TimeTrace 数据仅作为兼容来源。',
-              color: Theme.of(context).colorScheme.primary,
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 14),
       _SettingsCard(
         title: '对话服务',
         subtitle: 'ChatGPT / Codex 的订阅登录不能直接作为第三方桌面应用的 API 凭据。',
@@ -833,9 +830,16 @@ class _SettingsPageState extends State<SettingsPage> {
         child: const Column(
           children: [
             _ArchitectureRow(
+              icon: Icons.visibility_off_outlined,
+              title: '不会采集',
+              body: '窗口标题、截图、音频、键盘内容、文件路径与浏览历史',
+              badge: 'Not collected',
+            ),
+            Divider(height: 24),
+            _ArchitectureRow(
               icon: Icons.lock_outline_rounded,
-              title: '始终留在本机',
-              body: '模型资源、API Key、数据库路径、窗口标题、截图和日记原文',
+              title: '只留在本机',
+              body: '模型资源、API Key、活动原始事件、数据库与长期记忆',
               badge: 'Local only',
             ),
             Divider(height: 24),
@@ -847,18 +851,6 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
-      ),
-      const SizedBox(height: 14),
-      _SettingsCard(
-        title: '活动时间线',
-        subtitle:
-            '原始事件保留 ${cfg.activityRetentionHours} 小时 · ${ActivityHistory.instance.path}',
-        trailing: TextButton.icon(
-          onPressed: _confirmClearActivity,
-          icon: const Icon(Icons.auto_delete_outlined, size: 18),
-          label: const Text('清理'),
-        ),
-        child: _activityPreview(),
       ),
       const SizedBox(height: 14),
       _SettingsCard(
@@ -921,60 +913,6 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Widget _activityPreview() {
-    try {
-      final episodes = ActivityHistory.instance.recentEpisodes(limit: 6);
-      if (episodes.isEmpty) {
-        return const _EmptyState(
-          icon: Icons.history_toggle_off_outlined,
-          title: '还没有活动片段',
-          body: '启用后，Amadeus 会在本机生成可删除的应用活动时间线。',
-        );
-      }
-      return Column(
-        children: [
-          for (var i = 0; i < episodes.length; i++) ...[
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: CircleAvatar(
-                radius: 17,
-                child: Text(
-                  episodes[i].appName.characters.first.toUpperCase(),
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ),
-              title: Text('在 ${episodes[i].appName} 活动'),
-              subtitle: Text(
-                '${_activityClock(episodes[i].startedAt)} · '
-                '${episodes[i].durationText}',
-              ),
-            ),
-            if (i < episodes.length - 1) const Divider(height: 1),
-          ],
-        ],
-      );
-    } catch (_) {
-      return const _EmptyState(
-        icon: Icons.timeline_outlined,
-        title: '活动库尚未初始化',
-        body: '启动 Amadeus 后会自动创建独立的短期活动库。',
-      );
-    }
-  }
-
-  String _activityClock(DateTime value) {
-    final today = DateTime.now();
-    final sameDay =
-        value.year == today.year &&
-        value.month == today.month &&
-        value.day == today.day;
-    final hour = value.hour.toString().padLeft(2, '0');
-    final minute = value.minute.toString().padLeft(2, '0');
-    return sameDay
-        ? '今天 $hour:$minute'
-        : '${value.month}月${value.day}日 $hour:$minute';
-  }
-
   Future<void> _confirmClearActivity() async {
     final range = await showDialog<String>(
       context: context,
@@ -1002,7 +940,7 @@ class _SettingsPageState extends State<SettingsPage> {
       '1d' => now.subtract(const Duration(days: 1)),
       _ => null,
     };
-    ActivityHistory.instance.clearSince(since);
+    (widget.activityHistory ?? ActivityHistory.instance).clearSince(since);
     if (mounted) setState(() {});
   }
 
@@ -1198,17 +1136,19 @@ class _NavTile extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.compact = false,
   });
 
   final bool selected;
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Material(
+    final tile = Material(
       color: selected
           ? scheme.primary.withValues(alpha: 0.12)
           : Colors.transparent,
@@ -1217,27 +1157,38 @@ class _NavTile extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 10 : 12,
+            vertical: 11,
+          ),
           child: Row(
+            mainAxisAlignment: compact
+                ? MainAxisAlignment.center
+                : MainAxisAlignment.start,
             children: [
               Icon(
                 icon,
                 size: 19,
                 color: selected ? scheme.primary : scheme.onSurfaceVariant,
               ),
-              const SizedBox(width: 11),
-              Text(
-                label,
-                style: TextStyle(
-                  color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              if (!compact) ...[
+                const SizedBox(width: 11),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected
+                        ? scheme.onSurface
+                        : scheme.onSurfaceVariant,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
       ),
     );
+    return compact ? Tooltip(message: label, child: tile) : tile;
   }
 }
 

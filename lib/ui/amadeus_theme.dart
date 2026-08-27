@@ -12,6 +12,9 @@ abstract final class AmadeusTheme {
   static const mist = Color(0xFFF7F3F4);
   static const blueGrey = Color(0xFF95A4BE);
   static const mint = Color(0xFF79BDA8);
+  static const focus = Color(0xFFD6A15F);
+  static const memory = Color(0xFF9B8AC4);
+  static const event = Color(0xFF6E91C7);
 
   static ThemeData light() => _build(Brightness.light);
 
@@ -72,6 +75,14 @@ abstract final class AmadeusTheme {
           borderRadius: BorderRadius.circular(18),
           side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.8)),
         ),
+      ),
+      tooltipTheme: TooltipThemeData(
+        waitDuration: const Duration(milliseconds: 450),
+        decoration: BoxDecoration(
+          color: scheme.inverseSurface,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        textStyle: TextStyle(color: scheme.onInverseSurface, fontSize: 12),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,

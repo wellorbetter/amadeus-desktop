@@ -25,7 +25,8 @@ void main() {
   });
 
   test('consecutive snapshots become a local activity episode', () {
-    final start = DateTime(2026, 8, 27, 9);
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day, 9);
     history.recordSnapshot(
       ActivitySnapshot(
         appName: 'Android Studio',
@@ -60,6 +61,27 @@ void main() {
       (episode) => episode.appName == 'Android Studio',
     );
     expect(studio.durationSeconds, 70);
+    expect(history.eventCount(), 3);
+    final pulse = history.pulse();
+    expect(pulse.topApp, 'Android Studio');
+    expect(pulse.activeSeconds, 70);
+    expect(pulse.rawEvents, 3);
+  });
+
+  test('native Rust privacy decision fails closed before persistence', () {
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Secret Workspace',
+        appId: 'secret.app',
+        idleSeconds: 0,
+        capturedAt: DateTime.now(),
+        nativeDecision: ActivityDecision.excluded,
+        nativeCoreVersion: 1,
+      ),
+    );
+
+    expect(history.eventCount(), 0);
+    expect(history.recentEpisodes(), isEmpty);
   });
 
   test('excluded apps and idle sessions do not appear in the timeline', () {

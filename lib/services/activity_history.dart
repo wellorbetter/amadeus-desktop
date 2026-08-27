@@ -8,12 +8,16 @@ import 'app_paths.dart';
 import 'pet_config.dart';
 import 'pet_logger.dart';
 
+enum ActivityDecision { active, idle, excluded }
+
 class ActivitySnapshot {
   const ActivitySnapshot({
     required this.appName,
     required this.appId,
     required this.idleSeconds,
     required this.capturedAt,
+    this.nativeDecision,
+    this.nativeCoreVersion,
   });
 
   factory ActivitySnapshot.fromMap(Map<Object?, Object?> map) {
@@ -22,6 +26,13 @@ class ActivitySnapshot {
       appId: map['appId']?.toString().trim() ?? '',
       idleSeconds: (map['idleSeconds'] as num?)?.toInt() ?? 0,
       capturedAt: DateTime.now(),
+      nativeDecision: switch ((map['decision'] as num?)?.toInt()) {
+        0 => ActivityDecision.active,
+        1 => ActivityDecision.idle,
+        2 => ActivityDecision.excluded,
+        _ => null,
+      },
+      nativeCoreVersion: (map['coreVersion'] as num?)?.toInt(),
     );
   }
 
@@ -29,6 +40,8 @@ class ActivitySnapshot {
   final String appId;
   final int idleSeconds;
   final DateTime capturedAt;
+  final ActivityDecision? nativeDecision;
+  final int? nativeCoreVersion;
 }
 
 class ActivityEpisode {
@@ -53,6 +66,46 @@ class ActivityEpisode {
     final hours = minutes ~/ 60;
     final rest = minutes % 60;
     return rest == 0 ? '$hours 小时' : '$hours 小时 $rest 分钟';
+  }
+}
+
+class ActivityDayPoint {
+  const ActivityDayPoint({
+    required this.date,
+    required this.activeSeconds,
+    required this.idleSeconds,
+    required this.switches,
+  });
+
+  final DateTime date;
+  final int activeSeconds;
+  final int idleSeconds;
+  final int switches;
+}
+
+class ActivityPulse {
+  const ActivityPulse({
+    required this.activeSeconds,
+    required this.idleSeconds,
+    required this.switches,
+    required this.rawEvents,
+    required this.topApp,
+    required this.days,
+  });
+
+  final int activeSeconds;
+  final int idleSeconds;
+  final int switches;
+  final int rawEvents;
+  final String topApp;
+  final List<ActivityDayPoint> days;
+
+  int get focusScore {
+    if (activeSeconds == 0) return 0;
+    final total = (activeSeconds + idleSeconds).clamp(1, 1 << 62).toInt();
+    final activeRatio = activeSeconds * 100 ~/ total;
+    final switchPenalty = (switches - 12).clamp(0, 40).toInt();
+    return (activeRatio - switchPenalty).clamp(0, 100).toInt();
   }
 }
 
@@ -120,6 +173,20 @@ class ActivityHistory {
       ..execute(
         'CREATE INDEX IF NOT EXISTS idx_activity_ended '
         'ON usage_sessions(ended_at)',
+      )
+      ..execute(
+        'CREATE TABLE IF NOT EXISTS activity_events('
+        'sequence INTEGER PRIMARY KEY AUTOINCREMENT,'
+        'app_id TEXT NOT NULL,'
+        'app_name TEXT NOT NULL,'
+        'captured_at TEXT NOT NULL,'
+        'idle_secs INTEGER NOT NULL DEFAULT 0,'
+        'state TEXT NOT NULL,'
+        'date TEXT NOT NULL)',
+      )
+      ..execute(
+        'CREATE INDEX IF NOT EXISTS idx_activity_events_date '
+        'ON activity_events(date, captured_at)',
       );
   }
 
@@ -166,9 +233,11 @@ class ActivityHistory {
   Future<ActivitySnapshot?> _nativeSnapshot() async {
     if (!Platform.isWindows && !Platform.isMacOS) return null;
     try {
-      final map = await _channel.invokeMapMethod<Object?, Object?>(
-        'getSnapshot',
-      );
+      final map = await _channel
+          .invokeMapMethod<Object?, Object?>('getSnapshot', {
+            'idleThreshold': PetConfig.instance.activityIdleSeconds,
+            'excludedApps': PetConfig.instance.activityExcludedApps,
+          });
       return map == null ? null : ActivitySnapshot.fromMap(map);
     } on MissingPluginException {
       return null;
@@ -195,20 +264,42 @@ class ActivityHistory {
       'amadeus-desktop',
       'amadeus-desktop.exe',
     }.contains(normalized);
-    if (excluded || self) {
+    final decision = snapshot.nativeCoreVersion == 1
+        ? snapshot.nativeDecision
+        : null;
+    if (excluded || self || decision == ActivityDecision.excluded) {
       _finishCurrent(snapshot.capturedAt);
       return;
     }
 
-    final idle = snapshot.idleSeconds >= cfg.activityIdleSeconds;
+    final idle =
+        decision == ActivityDecision.idle ||
+        (decision == null && snapshot.idleSeconds >= cfg.activityIdleSeconds);
     final appName = idle ? '空闲' : snapshot.appName;
     final key = idle ? '__idle__' : '${snapshot.appId}|$normalized';
+    _appendEvent(snapshot, appName, idle);
     if (_currentKey != key) {
       _finishCurrent(snapshot.capturedAt);
       _startSession(snapshot, appName, idle, key);
     } else {
       _updateCurrent(snapshot.capturedAt);
     }
+  }
+
+  void _appendEvent(ActivitySnapshot snapshot, String appName, bool idle) {
+    _database.execute(
+      'INSERT INTO activity_events('
+      'app_id, app_name, captured_at, idle_secs, state, date) '
+      'VALUES(?, ?, ?, ?, ?, ?)',
+      [
+        snapshot.appId,
+        appName,
+        snapshot.capturedAt.toIso8601String(),
+        snapshot.idleSeconds,
+        idle ? 'idle' : 'active',
+        _dateKey(snapshot.capturedAt),
+      ],
+    );
   }
 
   void _startSession(
@@ -281,21 +372,81 @@ class ActivityHistory {
   int eventCount() {
     init();
     return (_database
-                .select('SELECT COUNT(*) AS n FROM usage_sessions')
+                .select('SELECT COUNT(*) AS n FROM activity_events')
                 .first['n']
             as num)
         .toInt();
+  }
+
+  ActivityPulse pulse({int days = 7}) {
+    init();
+    final safeDays = days.clamp(1, 31).toInt();
+    final now = DateTime.now();
+    final points = <ActivityDayPoint>[];
+    for (var offset = safeDays - 1; offset >= 0; offset--) {
+      final date = now.subtract(Duration(days: offset));
+      final rows = _database.select(
+        'SELECT duration_secs, is_idle FROM usage_sessions WHERE date = ?',
+        [_dateKey(date)],
+      );
+      var active = 0;
+      var idle = 0;
+      var switches = 0;
+      for (final row in rows) {
+        final seconds = (row['duration_secs'] as num?)?.toInt() ?? 0;
+        if ((row['is_idle'] as num?)?.toInt() == 1) {
+          idle += seconds;
+        } else {
+          active += seconds;
+          switches++;
+        }
+      }
+      points.add(
+        ActivityDayPoint(
+          date: date,
+          activeSeconds: active,
+          idleSeconds: idle,
+          switches: switches,
+        ),
+      );
+    }
+
+    final today = points.last;
+    final topRows = _database.select(
+      'SELECT app_name, SUM(duration_secs) AS seconds '
+      'FROM usage_sessions WHERE date = ? AND is_idle = 0 '
+      'GROUP BY app_name ORDER BY seconds DESC LIMIT 1',
+      [_dateKey(now)],
+    );
+    final rawRows = _database.select(
+      'SELECT COUNT(*) AS n FROM activity_events WHERE date = ?',
+      [_dateKey(now)],
+    );
+    return ActivityPulse(
+      activeSeconds: today.activeSeconds,
+      idleSeconds: today.idleSeconds,
+      switches: today.switches,
+      rawEvents: (rawRows.first['n'] as num).toInt(),
+      topApp: topRows.isEmpty ? '暂无' : '${topRows.first['app_name']}',
+      days: List.unmodifiable(points),
+    );
   }
 
   void clearSince(DateTime? since) {
     init();
     _finishCurrent(DateTime.now());
     if (since == null) {
-      _database.execute('DELETE FROM usage_sessions');
+      _database
+        ..execute('DELETE FROM activity_events')
+        ..execute('DELETE FROM usage_sessions');
     } else {
-      _database.execute('DELETE FROM usage_sessions WHERE ended_at >= ?', [
-        since.toIso8601String(),
-      ]);
+      _database
+        ..execute('DELETE FROM activity_events WHERE captured_at >= ?', [
+          since.toIso8601String(),
+        ])
+        ..execute('DELETE FROM usage_sessions WHERE ended_at >= ?', [
+          since.toIso8601String(),
+        ]);
     }
   }
 
@@ -303,6 +454,9 @@ class ActivityHistory {
     init();
     final cutoff = DateTime.now().subtract(Duration(hours: retentionHours));
     _database.execute('DELETE FROM usage_sessions WHERE ended_at < ?', [
+      cutoff.toIso8601String(),
+    ]);
+    _database.execute('DELETE FROM activity_events WHERE captured_at < ?', [
       cutoff.toIso8601String(),
     ]);
   }

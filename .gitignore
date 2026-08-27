@@ -25,6 +25,9 @@ windows/flutter/generated_plugins.cmake
 __pycache__/
 *.pyc
 
+# Rust
+/rust/target/
+
 # 模型资源不入库（版权：使用者自备）
 /models/
 /soul.md

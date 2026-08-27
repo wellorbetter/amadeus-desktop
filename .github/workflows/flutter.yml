@@ -24,6 +24,10 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - name: Verify Rust formatting
+        run: cargo fmt --manifest-path rust/Cargo.toml -- --check
+      - name: Test Rust activity core
+        run: cargo test --manifest-path rust/Cargo.toml
       - name: Verify formatting
         run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze

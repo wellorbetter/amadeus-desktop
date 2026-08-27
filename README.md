@@ -7,7 +7,7 @@
 <p align="center">
   本地优先、可主动交互、拥有用户可控记忆的 Windows / macOS 桌面伴侣
   <br>
-  <b>Flutter</b> · <b>Live2D</b> · <b>Built-in activity awareness</b> · <b>Local memory</b>
+  <b>Flutter</b> · <b>Rust</b> · <b>Live2D</b> · <b>Built-in activity awareness</b> · <b>Local memory</b>
 </p>
 
 <p align="center"><a href="README_EN.md">English</a></p>
@@ -99,7 +99,7 @@ ChatGPT / Codex 订阅登录不能直接作为第三方桌面应用的 API 凭�
 
 ## 构建
 
-环境要求：Flutter stable。Windows 需要 Visual Studio Desktop C++，macOS 需要当前 Xcode。
+环境要求：Flutter stable 与 Rust stable。Windows 需要 Visual Studio Desktop C++，macOS 需要当前 Xcode；构建脚本会为当前 macOS 架构准备对应的 Rust target。
 
 ```bash
 flutter pub get
@@ -121,6 +121,7 @@ GitHub Actions 会分别在 Windows 和 macOS runner 上生成构建产物。CI 
 | --- | --- |
 | `lib/services/observation_source.dart` | Agent 观察能力边界 |
 | `lib/services/activity_history.dart` | 内置活动采集、短期 SQLite 时间线与清除策略 |
+| `rust/` | 跨端隐私分类与专注指标核心，通过稳定 C ABI 接入 Flutter runner |
 | `lib/services/tt_api.dart` | 活动聚合与旧 TimeTrace 兼容适配 |
 | `lib/services/pet_memory.dart` | 记忆筛选、召回与画像 |
 | `lib/services/trigger_engine.dart` | 主动性与打扰控制 |
@@ -130,9 +131,9 @@ GitHub Actions 会分别在 Windows 和 macOS runner 上生成构建产物。CI 
 
 ## 活动感知的边界
 
-这一层参考了 Computer History 的可控性设计：明确开启状态、托盘暂停、数据源排除、短期原始记录和可清除时间线。当前实现刻意保持窄能力面：每 10 秒只向原生层询问前台应用标识与全局空闲秒数，不请求屏幕录制，也不读取窗口标题、文档内容、浏览历史或按键内容。
+这一层参考了 Computer History 的可控性设计：明确开启状态、托盘暂停、数据源排除、短期原始记录和可清除时间线。数据流借鉴 Kafka 的事件日志与投影思想，但不引入 Kafka 运行时：原生层采集最小信号，Rust 在写入前做空闲、自身进程与排除项分类，SQLite `activity_events` 保存可按保留期清除的追加事件，Flutter 再把它投影为 `usage_sessions`、七日节律与对话所需的聚合上下文。
 
-Windows 使用 Win32 前台进程与 `GetLastInputInfo`；macOS 使用 `NSWorkspace.frontmostApplication` 与 `CGEventSource` 空闲时间。两端都只把最小事件写入本机 `activity.db`，并在生成对话上下文前转换成聚合摘要。
+当前实现刻意保持窄能力面：每 10 秒只向原生层询问前台应用标识与全局空闲秒数，不请求屏幕录制，也不读取窗口标题、文档内容、浏览历史或按键内容。Windows 使用 Win32 前台进程与 `GetLastInputInfo`；macOS 使用 `NSWorkspace.frontmostApplication` 与 `CGEventSource` 空闲时间。
 
 ## License
 

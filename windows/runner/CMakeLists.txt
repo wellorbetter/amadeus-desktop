@@ -16,6 +16,24 @@ add_executable(${BINARY_NAME} WIN32
   "runner.exe.manifest"
 )
 
+# Rust owns the privacy classification and event semantics shared with macOS.
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+set(AMADEUS_RUST_MANIFEST "${CMAKE_SOURCE_DIR}/../rust/Cargo.toml")
+set(AMADEUS_RUST_LIBRARY "${CMAKE_SOURCE_DIR}/../rust/target/release/amadeus_core.lib")
+add_custom_command(
+  OUTPUT "${AMADEUS_RUST_LIBRARY}"
+  COMMAND "${CARGO_EXECUTABLE}" build
+          --manifest-path "${AMADEUS_RUST_MANIFEST}" --release
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
+  DEPENDS
+    "${CMAKE_SOURCE_DIR}/../rust/src/lib.rs"
+    "${AMADEUS_RUST_MANIFEST}"
+  COMMENT "Building Amadeus Rust activity core"
+  VERBATIM
+)
+add_custom_target(amadeus_core_build DEPENDS "${AMADEUS_RUST_LIBRARY}")
+add_dependencies(${BINARY_NAME} amadeus_core_build)
+
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
@@ -34,7 +52,10 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
-target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+target_link_libraries(${BINARY_NAME} PRIVATE "${AMADEUS_RUST_LIBRARY}")
+target_include_directories(${BINARY_NAME} PRIVATE
+  "${CMAKE_SOURCE_DIR}"
+  "${CMAKE_SOURCE_DIR}/../rust/include")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)

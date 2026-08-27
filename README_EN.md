@@ -5,7 +5,7 @@
 <h1 align="center">Amadeus · Personal Desktop Agent</h1>
 
 <p align="center">
-  A local-first, proactive desktop companion with user-controlled memory for Windows and macOS
+A local-first Flutter + Rust desktop companion with user-controlled memory for Windows and macOS
 </p>
 
 <p align="center"><a href="README.md">中文</a></p>
@@ -55,7 +55,7 @@ Windows keeps the legacy `%APPDATA%\timepet` directory. macOS uses `~/Library/Ap
 
 ## Build
 
-Use Flutter stable. Windows requires Visual Studio Desktop C++; macOS requires Xcode.
+Use Flutter stable and Rust stable. Windows requires Visual Studio Desktop C++; macOS requires Xcode. The build prepares the Rust target for the active macOS architecture.
 
 ```bash
 flutter pub get
@@ -74,6 +74,7 @@ GitHub Actions validates analysis/tests and builds on native Windows and macOS r
 | --- | --- |
 | `observation_source.dart` | Agent capability boundary |
 | `activity_history.dart` | Built-in activity capture, short-lived SQLite timeline, and deletion policy |
+| `rust/` | Cross-platform privacy classification and focus metrics exposed through a stable C ABI |
 | `tt_api.dart` | Activity aggregation and legacy TimeTrace compatibility |
 | `pet_memory.dart` | Memory selection, retrieval, and profile synthesis |
 | `trigger_engine.dart` | Initiative and interruption control |
@@ -82,9 +83,9 @@ GitHub Actions validates analysis/tests and builds on native Windows and macOS r
 
 ## Activity-awareness boundary
 
-The control model is inspired by Computer History: visible state, tray pause, source exclusions, short-lived raw events, and a clearable timeline. The implementation intentionally stays narrow. Every 10 seconds it asks the native layer only for the frontmost application identity and global idle duration; it does not request screen-recording or accessibility content.
+The control model is inspired by Computer History: visible state, tray pause, source exclusions, short-lived raw events, and a clearable timeline. Its data flow borrows Kafka's event-log and projection ideas without adding a Kafka runtime: the native layer captures the minimum signal, Rust classifies idle/self/excluded activity before persistence, SQLite `activity_events` holds the retention-bound append-only stream, and Flutter projects it into `usage_sessions`, seven-day rhythms, and compact conversational context.
 
-Windows uses the foreground Win32 process and `GetLastInputInfo`. macOS uses `NSWorkspace.frontmostApplication` and `CGEventSource` idle time. Both store minimal events in the local `activity.db` before deriving aggregate conversational context.
+The implementation intentionally stays narrow. Every 10 seconds it asks the native layer only for the frontmost application identity and global idle duration; it does not request screen recording, window titles, document content, browser history, or keyboard content. Windows uses the foreground Win32 process and `GetLastInputInfo`; macOS uses `NSWorkspace.frontmostApplication` and `CGEventSource` idle time.
 
 ## License
 

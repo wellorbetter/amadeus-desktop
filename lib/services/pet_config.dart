@@ -33,6 +33,7 @@ class PetConfig {
   int bubbleAutoHideSeconds = 8; // 气泡自动隐藏秒数
   bool darkMode = true; // 设置窗口深浅主题（true=深色）
   double settingsOpacity = 0.96; // 设置窗口整体透明度
+  bool settingsSidebarCollapsed = false; // 设置窗口侧栏折叠状态
   String modelPath = ''; // Live2D 模型 json 路径（留空自动扫描 exe 与用户数据目录的 models）
 
   // ---- 主动对话 ----
@@ -118,6 +119,7 @@ class PetConfig {
       'bubbleAutoHideSeconds': 8,
       'darkMode': true,
       'settingsOpacity': 0.96,
+      'settingsSidebarCollapsed': false,
       'modelPath': '',
     },
     'proactive': {
@@ -239,6 +241,7 @@ class PetConfig {
       'bubbleAutoHideSeconds': bubbleAutoHideSeconds,
       'darkMode': darkMode,
       'settingsOpacity': settingsOpacity,
+      'settingsSidebarCollapsed': settingsSidebarCollapsed,
       'modelPath': modelPath,
     },
     'proactive': {
@@ -319,6 +322,8 @@ class PetConfig {
         a['settingsOpacity'],
         0.96,
       ).clamp(0.75, 1.0).toDouble();
+      settingsSidebarCollapsed =
+          a['settingsSidebarCollapsed'] as bool? ?? false;
       modelPath = a['modelPath']?.toString() ?? '';
     }
     final p = json['proactive'];
