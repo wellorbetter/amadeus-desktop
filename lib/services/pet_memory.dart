@@ -32,7 +32,7 @@ class PetMemory implements AgentMemorySource {
   // ---- 工作记忆 ----
 
   void record(String role, String content) {
-    if (content.isEmpty) return;
+    if (content.isEmpty || (role != 'user' && role != 'assistant')) return;
     _database.addMessage(role, content);
     _database.trimMessages(_msgCap);
   }
@@ -96,13 +96,64 @@ class PetMemory implements AgentMemorySource {
   /// 按当前话题召回相关长期记忆（用于 system prompt）。
   String relevantMemories(String query, {int limit = 3}) {
     if (query.isEmpty) return '';
-    final rows = _database.searchMemories(query, limit: limit);
+    final querySignals = _retrievalSignals(query);
+    final recallIntent = RegExp(
+      r'关于我|你(?:还)?记得我|我的(?:偏好|习惯|目标)|我喜欢什么',
+    ).hasMatch(query);
+    String? recallCategory;
+    if (query.contains('目标') || query.contains('计划')) {
+      recallCategory = 'goal';
+    } else if (query.contains('偏好') || query.contains('喜欢什么')) {
+      recallCategory = 'preference';
+    } else if (query.contains('习惯')) {
+      recallCategory = 'habit';
+    }
+    final generalRecall = RegExp(r'关于我|记得我(?:什么|哪些)').hasMatch(query);
+    final ranked = <({Map<String, Object?> row, int score})>[];
+    for (final row in _database.recentMemoryRows(limit: 64)) {
+      final memorySignals = _retrievalSignals('${row['content']}');
+      final overlap = querySignals.intersection(memorySignals).length;
+      final category = row['category']?.toString();
+      final categoryMatch =
+          recallCategory != null && category == recallCategory;
+      if (overlap >= 2 ||
+          (recallIntent && (overlap >= 1 || categoryMatch || generalRecall))) {
+        ranked.add((row: row, score: overlap + (categoryMatch ? 1 : 0)));
+      }
+    }
+    ranked.sort((a, b) {
+      final byScore = b.score.compareTo(a.score);
+      if (byScore != 0) return byScore;
+      final aImportance = (a.row['importance'] as num?)?.toInt() ?? 1;
+      final bImportance = (b.row['importance'] as num?)?.toInt() ?? 1;
+      return bImportance.compareTo(aImportance);
+    });
+    final rows = ranked.take(limit).map((entry) => entry.row).toList();
     if (rows.isEmpty) return '';
     final sb = StringBuffer('长期记忆（可能相关，自然融入，不要直白引用）：\n');
     for (final r in rows) {
       sb.writeln('- ${r['content']}');
     }
     return sb.toString().trim();
+  }
+
+  /// Small local relevance filter. Chinese bigrams and Latin words are enough
+  /// for a compact personal store and avoid sending unrelated top memories on
+  /// every request merely because they have high importance.
+  Set<String> _retrievalSignals(String text) {
+    final normalized = text.toLowerCase();
+    final signals = <String>{};
+    final latinPattern = RegExp(r'[a-z0-9][a-z0-9_.+-]+');
+    for (final match in latinPattern.allMatches(normalized)) {
+      signals.add(match.group(0)!);
+    }
+    for (final match in RegExp(r'[\u3400-\u9fff]+').allMatches(normalized)) {
+      final run = match.group(0)!;
+      for (var index = 0; index + 1 < run.length; index++) {
+        signals.add(run.substring(index, index + 2));
+      }
+    }
+    return signals;
   }
 
   @override

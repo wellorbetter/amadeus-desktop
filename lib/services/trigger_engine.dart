@@ -364,7 +364,6 @@ class TriggerEngine {
       if (decision.memoryId != null) {
         _lastNudgedMemoryId = decision.memoryId!;
       }
-      PetMemory.instance.record('system', '触发主动聊天：${decision.prompt}');
     } catch (e) {
       PetLog.e('trigger: tick error: $e');
       PetDb.instance.setAgentState('observing', '主动触发评估失败，继续观察');

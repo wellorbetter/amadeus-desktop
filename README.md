@@ -116,7 +116,7 @@ ChatGPT / Codex 订阅登录不能直接作为第三方桌面应用的 API 凭�
 | MCP | 尚未实现 | 当前没有工具发现、权限或调用运行时 |
 | Evolve | 尚未实现 | 当前不会自主修改人格、策略或代码 |
 
-Amadeus 内化的是 Computer History/活动感知能力，不是整个 TimeTrace 产品。TimeTrace 的 Diary、Project / Session 和 AI Recap / Insight 仍属于独立产品；旧 TimeTrace 数据在这里仅作为迁移兼容观察源。AI Recap 是时间数据分析，不是 Amadeus 的人格 Agent。
+Amadeus 内化的是 Computer History/活动感知能力，不是整个 TimeTrace 产品。TimeTrace 的完整 Statistics、Diary、Project / Session 和 AI Recap / Insight 仍属于独立产品；Amadeus 只保留触发与上下文需要的基础活动节律，旧 TimeTrace 数据在这里仅作为迁移兼容观察源。AI Recap 是时间数据分析，不是 Amadeus 的人格 Agent。
 
 ## 构建
 

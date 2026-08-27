@@ -218,7 +218,9 @@ class PetDb {
     if (_db == null) return const [];
     return db
         .select(
-          'SELECT role, content, ts FROM messages ORDER BY id DESC LIMIT ?',
+          "SELECT role, content, ts FROM messages "
+          "WHERE role IN ('user', 'assistant') "
+          'ORDER BY id DESC LIMIT ?',
           [limit],
         )
         .toList()

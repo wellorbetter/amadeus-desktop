@@ -525,7 +525,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 icon: Icons.history_toggle_off_rounded,
                 title: 'TimeTrace 兼容边界',
                 body:
-                    '只读取旧活动数据；Diary、Project / Session 与 AI Recap 仍属于 TimeTrace',
+                    '只读取旧活动数据；完整 Statistics、Diary、Project / Session 与 AI Recap 仍属于 TimeTrace',
                 badge: '独立产品',
               ),
             ],

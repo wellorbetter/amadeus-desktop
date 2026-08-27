@@ -43,7 +43,7 @@ This separation matters:
 | Skill / MCP / Evolve | Not installed | Reserved extension points; never claimed in the prompt |
 | TimeTrace compatibility | Implemented | Reads compatible activity data without making TimeTrace a runtime dependency |
 
-Amadeus internalizes only TimeTrace's activity-awareness capability. Diary, Project/Session, Statistics UI, and AI Recap remain TimeTrace product features. In particular, AI Recap is an analysis feature, not the personality agent.
+Amadeus internalizes only TimeTrace's activity-awareness capability. The full Statistics experience, Diary, Project/Session, and AI Recap remain TimeTrace product features; Amadeus keeps only the basic rhythms needed by triggers and context. In particular, AI Recap is an analysis feature, not the personality agent.
 
 ## Highlights
 
