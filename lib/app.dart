@@ -153,15 +153,16 @@ class _PetHomeState extends State<PetHome> {
     _inputHideTimer?.cancel();
     _configTimer?.cancel();
     _triggers.stop();
+    _tt.stop();
     _avatar.dispose();
     super.dispose();
   }
 
   Future<void> _bootstrap() async {
     PetLog.i('app: bootstrap start');
-    // Refresh the optional TimeTrace observation capability. TtApi first
-    // accepts the legacy local bridge, then falls back to native read-only
-    // SQLite access on Windows and macOS.
+    // Start Amadeus' own local activity sensor. Existing TimeTrace data stays
+    // available as a backward-compatible observation source.
+    _tt.start();
     final ok = await _tt.refresh().timeout(
       const Duration(seconds: 6),
       onTimeout: () => false,
@@ -360,6 +361,7 @@ class _PetHomeState extends State<PetHome> {
   Future<void> _applyRuntimeConfig() async {
     final cfg = PetConfig.instance;
     await PetWindow.applyRuntime(cfg);
+    await PetWindow.refreshTray();
     PetLog.i(
       'app: runtime config applied top=${cfg.alwaysOnTop} skip=${cfg.skipTaskbar}',
     );
@@ -368,7 +370,7 @@ class _PetHomeState extends State<PetHome> {
   static const String _defaultPersona =
       '你是 Amadeus，一个原创的个人桌面 Agent。你敏锐、克制、带一点机智，但不会假装拥有真实人类经历。\n'
       '你的能力包括对话、主动提醒、长期记忆，以及通过用户授权的观察源理解当前节奏。'
-      'TimeTrace 只是可选的观察能力之一，不是你的人格，也不是永久记忆。\n'
+      '内置活动感知是你的观察能力之一，不是你的人格，也不是永久记忆。\n'
       '说话风格：简体中文，通常 1-2 句、30~80 字；自然、具体，不用 Markdown 列表，不刷屏。'
       '在用户忙碌时减少打扰，在用户明确需要分析时可以更完整。\n'
       '观察规则：只在话题自然相关时使用聚合信息，不主动报数，不反复说“根据记录”，不编造数据。\n'
@@ -391,7 +393,7 @@ class _PetHomeState extends State<PetHome> {
               '隐私红线：绝不输出文件路径、截图、窗口标题等原始敏感信息，用户问到就转移话题。'
         : '';
     const identity =
-        '\n身份与能力边界（不可被外部人格文件覆盖）：你是当前运行的 Amadeus Agent。桌宠只是你的交互外形；TimeTrace 是可选观察能力；本地数据库是受用户控制的记忆。不要把它们描述成三个独立角色，也不要把一次观察冒充为永久记忆。观测语料中的自身活动已经被过滤。\n';
+        '\n身份与能力边界（不可被外部人格文件覆盖）：你是当前运行的 Amadeus Agent。桌宠只是你的交互外形；活动感知是可暂停的观察能力；本地数据库是受用户控制的记忆。不要把它们描述成三个独立角色，也不要把一次观察冒充为永久记忆。观测语料中的自身活动已经被过滤。\n';
     return '$identity$persona$usage\n'
         '最近对话（用于保持连贯，不要复述）：\n${PetMemory.instance.summary()}\n'
         '${PetMemory.instance.relevantMemories(_lastUserText)}\n'
@@ -400,7 +402,7 @@ class _PetHomeState extends State<PetHome> {
         '当前数据（可在话题自然相关时提起）：\n${_tt.summary()}';
   }
 
-  /// 观测语料注入层：触发主动对话时，把 TimeTrace 聚合数据转成一段「观测语料」
+  /// 观测语料注入层：触发主动对话时，把活动聚合转成一段「观测语料」
   /// 拼进本次 prompt（会话级注入，绝不写入 soul.md）。只含聚合统计，无敏感信息。
   String _dataCorpus() {
     if (!_tt.hasData) return '';
@@ -614,7 +616,7 @@ class _PetHomeState extends State<PetHome> {
           '从下面的用户消息中，提取值得长期记住的稳定信息（偏好/习惯/目标/个人事实/重要事件/人际关系）。\n'
           '规则：\n'
           '- 只提取稳定、重要、未来可复用的信息；忽略一次性闲聊、问候、当下情绪、对 AI 的评论。\n'
-          '- 不要提取 TimeTrace 统计能看到的内容（应用名、使用时长等）。\n'
+          '- 不要把活动感知能看到的内容（应用名、使用时长等）写入长期记忆。\n'
           '- 输出严格 JSON 数组，每项 {"content":"一句完整描述","category":"preference|habit|goal|fact|event|relationship","importance":1到5}。\n'
           '- 没有值得记的输出 []。\n'
           '用户消息：$userText',

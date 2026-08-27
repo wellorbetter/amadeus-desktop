@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import 'activity_history.dart';
 import 'app_paths.dart';
 import 'observation_source.dart';
 import 'pet_config.dart';
@@ -97,13 +98,14 @@ class HourUsage {
   final int minutes;
 }
 
-/// TimeTrace 聚合数据（本地 8788 API：今日 context + 历史日聚合）。
+/// Amadeus activity awareness. New activity is captured in-process; existing
+/// TimeTrace databases and the old local HTTP bridge remain migration inputs.
 class TtApi implements ObservationSource {
   @override
-  String get id => 'timetrace';
+  String get id => 'activity_awareness';
 
   @override
-  String get displayName => 'TimeTrace';
+  String get displayName => '活动感知';
   TtApi({String? base})
     : base =
           base ??
@@ -134,6 +136,9 @@ class TtApi implements ObservationSource {
   int get switches => _switches;
   String get foregroundApp => _foreground;
 
+  void start() => ActivityHistory.instance.start();
+  void stop() => ActivityHistory.instance.stop();
+
   static bool isSelfApp(String value) {
     final name = value.trim().toLowerCase();
     return const {
@@ -148,10 +153,20 @@ class TtApi implements ObservationSource {
 
   @override
   Future<bool> refresh() async {
-    if (!PetConfig.instance.timeTraceEnabled) {
+    final cfg = PetConfig.instance;
+    if (!cfg.activityAwarenessEnabled || cfg.activityAwarenessPaused) {
       _clear();
       return false;
     }
+    await ActivityHistory.instance.capture();
+
+    // The built-in short-lived activity database is now the primary source.
+    // Legacy TimeTrace files remain later candidates for seamless migration.
+    if (_refreshFromLocalDatabase()) {
+      _lastSync = DateTime.now();
+      return true;
+    }
+
     var ok = false;
     try {
       final ctx = await _getJson('/api/context');
@@ -198,7 +213,6 @@ class TtApi implements ObservationSource {
       ok = ok || hasHistory;
     }
 
-    if (!ok) ok = _refreshFromLocalDatabase();
     if (ok) _lastSync = DateTime.now();
     return ok;
   }
@@ -216,20 +230,20 @@ class TtApi implements ObservationSource {
     _history.clear();
   }
 
-  /// Native read-only fallback used when the optional legacy HTTP bridge is
-  /// absent. This makes TimeTrace an in-process observation capability on both
-  /// Windows and macOS and removes the runtime Node.js dependency.
+  /// Reads Amadeus' built-in event store first, then optional legacy TimeTrace
+  /// databases. The old HTTP bridge is used only when no local database exists.
   bool _refreshFromLocalDatabase() {
+    var foundDatabase = false;
     for (final candidate in AppPaths.timeTraceDatabases) {
       if (!candidate.existsSync()) continue;
+      foundDatabase = true;
       Database? db;
       try {
         db = sqlite3.open(candidate.path, mode: OpenMode.readOnly);
         final today = _dateKey(DateTime.now());
         final sessions = _sessions(db, today);
-        _applyToday(sessions);
 
-        _history.clear();
+        final candidateHistory = <DayInfo>[];
         for (var daysAgo = 7; daysAgo >= 1; daysAgo--) {
           final date = DateTime.now().subtract(Duration(days: daysAgo));
           final key = _dateKey(date);
@@ -265,7 +279,7 @@ class TtApi implements ObservationSource {
               [key],
             ).isNotEmpty;
           } catch (_) {}
-          _history.add(
+          candidateHistory.add(
             DayInfo(
               date: key,
               activeMin: (activeSeconds / 60).round(),
@@ -292,15 +306,32 @@ class TtApi implements ObservationSource {
             ),
           );
         }
+
+        // The built-in database is created on first launch. Do not let an
+        // empty file hide a user's existing TimeTrace history during the
+        // migration period; move on to the next compatibility source first.
+        final hasTodayData = sessions.any(
+          (row) => ((row['duration_secs'] as num?)?.toInt() ?? 0) > 0,
+        );
+        final hasHistoricalData = candidateHistory.any(
+          (day) => day.activeMin > 0 || day.idleMin > 0 || day.diaryHas,
+        );
+        if (!hasTodayData && !hasHistoricalData) continue;
+
+        _applyToday(sessions);
+        _history
+          ..clear()
+          ..addAll(candidateHistory);
         _lastHistoryAt = DateTime.now();
         return true;
       } catch (error) {
-        stderr.writeln('TimeTrace local read failed: $error');
+        stderr.writeln('Activity history read failed: $error');
       } finally {
         db?.close();
       }
     }
-    return false;
+    if (foundDatabase) _clear();
+    return foundDatabase;
   }
 
   ResultSet _sessions(Database db, String date) => db.select(
@@ -368,7 +399,7 @@ class TtApi implements ObservationSource {
   String summary() {
     final sb = StringBuffer();
     if (!hasData) {
-      sb.writeln('（暂无 TimeTrace 数据，请确认主程序在运行）');
+      sb.writeln('（活动感知尚无数据，或当前已暂停）');
       return sb.toString();
     }
     sb

@@ -29,6 +29,11 @@ abstract final class AppPaths {
   static File get memoryFile =>
       File('${userDataDirectory.path}${Platform.pathSeparator}mem.db');
 
+  /// Short-lived interaction events captured by Amadeus itself. This is kept
+  /// separate from [memoryFile]: observation is not long-term memory.
+  static File get activityFile =>
+      File('${userDataDirectory.path}${Platform.pathSeparator}activity.db');
+
   static File get soulFile =>
       File('${userDataDirectory.path}${Platform.pathSeparator}soul.md');
 
@@ -40,6 +45,7 @@ abstract final class AppPaths {
         Platform.environment['TIMEPET_TT_DB'] ??
         Platform.environment['TIMETRACE_DB'];
     final files = <File>[
+      activityFile,
       if (explicit != null && explicit.trim().isNotEmpty) File(explicit.trim()),
     ];
     if (Platform.isWindows) {

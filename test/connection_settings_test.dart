@@ -32,7 +32,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: SettingsPage(config: config)));
 
     expect(find.text('Amadeus 桌面端'), findsOneWidget);
-    expect(find.text('TimeTrace'), findsOneWidget);
+    expect(find.text('内置活动感知'), findsOneWidget);
     await tester.tap(find.text('记忆与隐私'));
     await tester.pumpAndSettle();
     expect(find.text('数据边界'), findsOneWidget);

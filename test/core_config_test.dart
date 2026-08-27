@@ -16,6 +16,8 @@ void main() {
     cfg.aiModel = 'broken-model';
     cfg.modelPath = 'C:/old/model.json';
     cfg.timeTraceEnabled = false;
+    cfg.activityAwarenessPaused = true;
+    cfg.activityRetentionHours = 12;
     cfg.save();
     cfg.resetToDefaults();
 
@@ -26,6 +28,8 @@ void main() {
     expect(cfg.modelPath, isEmpty);
     expect(cfg.soulText, isEmpty);
     expect(cfg.timeTraceEnabled, isTrue);
+    expect(cfg.activityAwarenessPaused, isFalse);
+    expect(cfg.activityRetentionHours, 48);
 
     final reloaded = PetConfig(pathOverride: '${dir.path}/config.json')..load();
     expect(reloaded.aiBaseUrl, 'https://api.openai.com/v1');

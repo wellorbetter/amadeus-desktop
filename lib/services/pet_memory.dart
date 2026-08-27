@@ -4,7 +4,7 @@ import 'tt_api.dart';
 
 /// 记忆层（本地 SQLite 分层记忆）：
 /// - 工作记忆：最近对话（messages 表）
-/// - 事实记忆：TimeTrace 每日聚合（daily_facts 表）
+/// - 事实记忆：活动感知每日聚合（daily_facts 表）
 /// - 语义记忆：经审核的长期记忆（memories 表，偏好/习惯/目标/事件）
 /// - 用户画像：由 daily_facts 计算的规律摘要
 /// 记忆审核：用户消息含稳定信息信号时，由 LLM 提取并写入语义记忆。

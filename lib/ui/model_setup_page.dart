@@ -191,7 +191,7 @@ class _ModelSetupPageState extends State<ModelSetupPage> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Amadeus 是独立应用。TimeTrace 只是可选的本地数据源：没有它，桌宠仍能对话；连接后，它才会从聚合记录中理解你的节奏。',
+              'Amadeus 是独立运行的桌面 Agent。活动感知已经内置：它用最少量的本地事件理解你的节奏，也可以随时暂停、排除应用或清除记录。',
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                 color: scheme.onSurfaceVariant,
                 height: 1.65,
@@ -205,7 +205,7 @@ class _ModelSetupPageState extends State<ModelSetupPage> {
                   const _FeatureCard(
                     icon: Icons.timeline_rounded,
                     title: '感知，但不监视',
-                    body: '只读取 TimeTrace 聚合统计；窗口标题、截图和日记原文不进入对话。',
+                    body: '只记录前台应用和空闲时长；不采集窗口标题、截图、音频或键盘输入内容。',
                   ),
                   const _FeatureCard(
                     icon: Icons.psychology_alt_outlined,
@@ -264,7 +264,7 @@ class _ModelSetupPageState extends State<ModelSetupPage> {
             ),
             const SizedBox(height: 14),
             Text(
-              '这四层彼此独立。更换 Live2D 形象不会改写人格；关闭 TimeTrace 也不会删除你的本地记忆。',
+              '这四层彼此独立。更换 Live2D 形象不会改写人格；暂停活动感知也不会删除你的本地记忆。',
               style: TextStyle(color: scheme.onSurfaceVariant, height: 1.6),
             ),
             const SizedBox(height: 24),
@@ -282,8 +282,8 @@ class _ModelSetupPageState extends State<ModelSetupPage> {
             ),
             const _BoundaryRow(
               number: '03',
-              title: 'TimeTrace 数据',
-              body: '可选、只读、仅聚合；断开后立即降级为普通桌宠。',
+              title: '活动时间线',
+              body: '默认本地短期保存，可暂停、排除应用或按时间范围清除；旧 TimeTrace 数据仍可兼容读取。',
               color: AmadeusTheme.mint,
             ),
             const _BoundaryRow(

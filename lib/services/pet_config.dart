@@ -59,7 +59,19 @@ class PetConfig {
   int chatAutoHideSeconds = 20; // 无操作多少秒后自动收起输入框
 
   // ---- Agent capabilities ----
-  bool timeTraceEnabled = true; // Optional read-only observation source
+  bool activityAwarenessEnabled = true;
+  bool activityAwarenessPaused = false;
+  int activityRetentionHours = 48;
+  int activityIdleSeconds = 300;
+  List<String> activityExcludedApps = const [
+    '1Password',
+    'Bitwarden',
+    'KeePass',
+  ];
+
+  /// Compatibility for pre-Agent configuration and callers.
+  bool get timeTraceEnabled => activityAwarenessEnabled;
+  set timeTraceEnabled(bool value) => activityAwarenessEnabled = value;
 
   // ---- AI ----
   bool aiEnabled = true;
@@ -92,7 +104,7 @@ class PetConfig {
 
   Map<String, dynamic> _defaults() => {
     '_说明':
-        'TimeTrace 桌宠动态配置。设置面板修改即时生效；外部编辑后 60 秒内自动热加载（无需重启）。proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠（空闲时停止主动对话/记忆审核，省 token）；appearance 为模型/气泡外观；ai 为对话模型；log 为日志；window 为窗口行为。',
+        'Amadeus 桌面 Agent 动态配置。activityAwareness 为内置活动感知；proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠；appearance 为形象与气泡；ai 为对话模型；log 为日志；window 为窗口行为。设置修改后即时生效。',
     'appearance': {
       'modelScale': 1.0,
       'displayWidth': 440,
@@ -127,7 +139,13 @@ class PetConfig {
     },
     'chat': {'autoHideSeconds': 20},
     'capabilities': {
-      'timetrace': {'enabled': true},
+      'activityAwareness': {
+        'enabled': true,
+        'paused': false,
+        'retentionHours': 48,
+        'idleSeconds': 300,
+        'excludedApps': ['1Password', 'Bitwarden', 'KeePass'],
+      },
     },
     'sleep': {'enabled': true, 'idleMinutes': 15, 'adaptiveFrequency': true},
     'ai': {
@@ -242,7 +260,13 @@ class PetConfig {
     },
     'chat': {'autoHideSeconds': chatAutoHideSeconds},
     'capabilities': {
-      'timetrace': {'enabled': timeTraceEnabled},
+      'activityAwareness': {
+        'enabled': activityAwarenessEnabled,
+        'paused': activityAwarenessPaused,
+        'retentionHours': activityRetentionHours,
+        'idleSeconds': activityIdleSeconds,
+        'excludedApps': activityExcludedApps,
+      },
     },
     'sleep': {
       'enabled': sleepEnabled,
@@ -334,9 +358,28 @@ class PetConfig {
     }
     final capabilities = json['capabilities'];
     if (capabilities is Map<String, dynamic>) {
-      final timetrace = capabilities['timetrace'];
-      if (timetrace is Map<String, dynamic>) {
-        timeTraceEnabled = timetrace['enabled'] as bool? ?? true;
+      final awareness = capabilities['activityAwareness'];
+      final legacy = capabilities['timetrace'];
+      if (awareness is Map<String, dynamic>) {
+        activityAwarenessEnabled = awareness['enabled'] as bool? ?? true;
+        activityAwarenessPaused = awareness['paused'] as bool? ?? false;
+        activityRetentionHours = _number(
+          awareness['retentionHours'],
+          48,
+        ).clamp(1, 720).toInt();
+        activityIdleSeconds = _number(
+          awareness['idleSeconds'],
+          300,
+        ).clamp(30, 3600).toInt();
+        final excluded = awareness['excludedApps'];
+        activityExcludedApps = excluded is List
+            ? excluded
+                  .map((item) => item.toString().trim())
+                  .where((item) => item.isNotEmpty)
+                  .toList(growable: false)
+            : const ['1Password', 'Bitwarden', 'KeePass'];
+      } else if (legacy is Map<String, dynamic>) {
+        activityAwarenessEnabled = legacy['enabled'] as bool? ?? true;
       }
     }
     final sl = json['sleep'];

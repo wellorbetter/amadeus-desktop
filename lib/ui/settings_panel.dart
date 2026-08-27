@@ -4,6 +4,7 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../services/activity_history.dart';
 import '../services/pet_config.dart';
 import '../services/pet_db.dart';
 import '../services/pet_logger.dart';
@@ -68,6 +69,7 @@ class _SettingsPageState extends State<SettingsPage> {
   final _modelPath = TextEditingController();
   final _soulFile = TextEditingController();
   final _soulText = TextEditingController();
+  final _excludedApps = TextEditingController();
 
   @override
   void initState() {
@@ -82,6 +84,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _modelPath.text = cfg.modelPath;
     _soulFile.text = cfg.soulFile;
     _soulText.text = cfg.soulText;
+    _excludedApps.text = cfg.activityExcludedApps.join(', ');
   }
 
   @override
@@ -96,6 +99,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _modelPath,
       _soulFile,
       _soulText,
+      _excludedApps,
     ]) {
       controller.dispose();
     }
@@ -257,7 +261,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 border: Border.all(color: scheme.outlineVariant),
               ),
               child: Text(
-                'TimeTrace 是可选数据源。断开后，Amadeus 仍可作为普通桌宠使用。',
+                '活动感知已内置。原始事件短期保存，与长期记忆完全分离。',
                 style: TextStyle(
                   color: scheme.onSurfaceVariant,
                   fontSize: 12,
@@ -370,6 +374,20 @@ class _SettingsPageState extends State<SettingsPage> {
                 onTap: () =>
                     setState(() => _section = _SettingsSection.privacy),
               ),
+              _OverviewCard(
+                icon: Icons.timeline_rounded,
+                title: '活动感知',
+                value: !cfg.activityAwarenessEnabled
+                    ? '已关闭'
+                    : (cfg.activityAwarenessPaused ? '已暂停' : '运行中'),
+                detail: '原始事件保留 ${cfg.activityRetentionHours} 小时',
+                color:
+                    cfg.activityAwarenessEnabled && !cfg.activityAwarenessPaused
+                    ? AmadeusTheme.mint
+                    : scheme.outline,
+                onTap: () =>
+                    setState(() => _section = _SettingsSection.intelligence),
+              ),
             ];
             if (stacked) {
               return Column(
@@ -396,7 +414,7 @@ class _SettingsPageState extends State<SettingsPage> {
         const SizedBox(height: 18),
         _SettingsCard(
           title: '产品结构',
-          subtitle: 'Amadeus 独立运行，TimeTrace 以只读数据源接入。',
+          subtitle: '观察能力已经进入 Amadeus 本体，TimeTrace 仅用于兼容旧数据。',
           child: Column(
             children: const [
               _ArchitectureRow(
@@ -408,9 +426,9 @@ class _SettingsPageState extends State<SettingsPage> {
               Divider(height: 24),
               _ArchitectureRow(
                 icon: Icons.timeline_rounded,
-                title: 'TimeTrace',
-                body: '只提供活跃时间、应用分布等聚合数据',
-                badge: '可选连接',
+                title: '内置活动感知',
+                body: '前台应用、活跃与空闲事件；不采集截图、声音和输入内容',
+                badge: '本机能力',
               ),
             ],
           ),
@@ -593,15 +611,60 @@ class _SettingsPageState extends State<SettingsPage> {
       _SettingsCard(
         title: '观察能力',
         subtitle: '能力提供短期上下文；只有记忆模块能决定哪些信息值得长期保留。',
-        child: _switchRow(
-          '连接 TimeTrace',
-          '只读当前状态与历史聚合。关闭后不再读取数据库或本地桥。',
-          cfg.timeTraceEnabled,
-          (value) {
-            cfg.timeTraceEnabled = value;
-            _commit();
-          },
-          showDivider: false,
+        child: Column(
+          children: [
+            _switchRow(
+              '活动感知',
+              '在本机记录前台应用和空闲时长；关闭后停止采集。',
+              cfg.activityAwarenessEnabled,
+              (value) {
+                cfg.activityAwarenessEnabled = value;
+                if (!value) cfg.activityAwarenessPaused = false;
+                _commit();
+              },
+            ),
+            _switchRow(
+              '暂时暂停',
+              '保留已有时间线，但不再收集新事件。托盘也可快速切换。',
+              cfg.activityAwarenessPaused,
+              cfg.activityAwarenessEnabled
+                  ? (value) {
+                      cfg.activityAwarenessPaused = value;
+                      _commit();
+                    }
+                  : null,
+            ),
+            _sliderRow(
+              '原始事件保留时间',
+              cfg.activityRetentionHours.toDouble(),
+              1,
+              168,
+              (value) {
+                cfg.activityRetentionHours = value.round();
+                _commit();
+              },
+              (value) => '${value.round()} 小时',
+            ),
+            _field(
+              label: '排除应用（逗号分隔）',
+              controller: _excludedApps,
+              hint: '1Password, Bitwarden, 银行客户端',
+              onChanged: (value) {
+                cfg.activityExcludedApps = value
+                    .split(RegExp(r'[,，\n]'))
+                    .map((item) => item.trim())
+                    .where((item) => item.isNotEmpty)
+                    .toList(growable: false);
+                _commit();
+              },
+            ),
+            const SizedBox(height: 12),
+            _InfoBanner(
+              icon: Icons.visibility_off_outlined,
+              text: '不采集截图、音频、窗口标题、文件路径或键盘输入内容。旧 TimeTrace 数据仅作为兼容来源。',
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ],
         ),
       ),
       const SizedBox(height: 14),
@@ -779,11 +842,23 @@ class _SettingsPageState extends State<SettingsPage> {
             _ArchitectureRow(
               icon: Icons.cloud_outlined,
               title: '发送到所选 AI 服务',
-              body: '你的消息、必要的近期对话，以及可选的 TimeTrace 聚合摘要',
+              body: '你的消息、必要的近期对话，以及可选的活动聚合摘要',
               badge: '可控',
             ),
           ],
         ),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '活动时间线',
+        subtitle:
+            '原始事件保留 ${cfg.activityRetentionHours} 小时 · ${ActivityHistory.instance.path}',
+        trailing: TextButton.icon(
+          onPressed: _confirmClearActivity,
+          icon: const Icon(Icons.auto_delete_outlined, size: 18),
+          label: const Text('清理'),
+        ),
+        child: _activityPreview(),
       ),
       const SizedBox(height: 14),
       _SettingsCard(
@@ -844,6 +919,91 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (_) {
       return 0;
     }
+  }
+
+  Widget _activityPreview() {
+    try {
+      final episodes = ActivityHistory.instance.recentEpisodes(limit: 6);
+      if (episodes.isEmpty) {
+        return const _EmptyState(
+          icon: Icons.history_toggle_off_outlined,
+          title: '还没有活动片段',
+          body: '启用后，Amadeus 会在本机生成可删除的应用活动时间线。',
+        );
+      }
+      return Column(
+        children: [
+          for (var i = 0; i < episodes.length; i++) ...[
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: CircleAvatar(
+                radius: 17,
+                child: Text(
+                  episodes[i].appName.characters.first.toUpperCase(),
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+              title: Text('在 ${episodes[i].appName} 活动'),
+              subtitle: Text(
+                '${_activityClock(episodes[i].startedAt)} · '
+                '${episodes[i].durationText}',
+              ),
+            ),
+            if (i < episodes.length - 1) const Divider(height: 1),
+          ],
+        ],
+      );
+    } catch (_) {
+      return const _EmptyState(
+        icon: Icons.timeline_outlined,
+        title: '活动库尚未初始化',
+        body: '启动 Amadeus 后会自动创建独立的短期活动库。',
+      );
+    }
+  }
+
+  String _activityClock(DateTime value) {
+    final today = DateTime.now();
+    final sameDay =
+        value.year == today.year &&
+        value.month == today.month &&
+        value.day == today.day;
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return sameDay
+        ? '今天 $hour:$minute'
+        : '${value.month}月${value.day}日 $hour:$minute';
+  }
+
+  Future<void> _confirmClearActivity() async {
+    final range = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('清理活动时间线'),
+        children: [
+          for (final option in const [
+            ('10m', '最近 10 分钟'),
+            ('1h', '最近 1 小时'),
+            ('1d', '最近 1 天'),
+            ('all', '全部活动历史'),
+          ])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, option.$1),
+              child: Text(option.$2),
+            ),
+        ],
+      ),
+    );
+    if (range == null) return;
+    final now = DateTime.now();
+    final since = switch (range) {
+      '10m' => now.subtract(const Duration(minutes: 10)),
+      '1h' => now.subtract(const Duration(hours: 1)),
+      '1d' => now.subtract(const Duration(days: 1)),
+      _ => null,
+    };
+    ActivityHistory.instance.clearSince(since);
+    if (mounted) setState(() {});
   }
 
   Widget _memoryPreview() {
@@ -959,7 +1119,7 @@ class _SettingsPageState extends State<SettingsPage> {
     String title,
     String detail,
     bool value,
-    ValueChanged<bool> onChanged, {
+    ValueChanged<bool>? onChanged, {
     bool showDivider = true,
   }) => Column(
     children: [

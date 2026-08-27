@@ -43,7 +43,7 @@ class DailyFact {
 /// 本地 SQLite 记忆库（%APPDATA%/timepet/mem.db）。
 /// 分层记忆：
 /// - messages    工作记忆：最近对话（替换旧 mem.json entries）
-/// - daily_facts 事实记忆：TimeTrace 每日聚合（结构化，供画像/召回）
+/// - daily_facts 事实记忆：活动感知每日聚合（结构化，供画像/召回）
 /// - memories    语义记忆：经审核的长期记忆（偏好/习惯/目标/事件）
 /// - key_value   元信息（迁移标记等）
 class PetDb {

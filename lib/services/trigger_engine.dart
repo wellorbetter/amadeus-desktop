@@ -5,7 +5,7 @@ import 'pet_logger.dart';
 import 'pet_memory.dart';
 import 'tt_api.dart';
 
-/// 主动交互触发引擎：每 60 秒基于 TimeTrace 数据 + 动态配置评估一次，
+/// 主动交互触发引擎：每 60 秒基于内置活动感知 + 动态配置评估一次，
 /// 满足条件且未超频率限制时，回调 [onProactive] 发起主动聊天。
 ///
 /// 休眠省电：连续空闲达到阈值（sleepIdleMinutes）后进入休眠，
@@ -96,7 +96,7 @@ class TriggerEngine {
       final hasData = tt.hasData;
 
       // —— 数据依赖的状态检测（空闲/休眠/专注/忙）——
-      // 无 TimeTrace 数据时按「在线模式」处理：保留整点/深夜/记忆关心/随机搭话等
+      // 无活动数据时按「在线模式」处理：保留整点/深夜/记忆关心/随机搭话等
       // 不依赖数据的主动互动（修复：不开数据服务时她完全不理人的问题）。
       var idleGrowing = false;
       var idleReturned = false;
@@ -137,7 +137,7 @@ class TriggerEngine {
         }
         focusLong = _foregroundTicks >= _focusThresholdTicks;
       } else {
-        // 无 TimeTrace：清空数据依赖的状态，避免旧值误触发
+        // 无活动数据：清空数据依赖的状态，避免旧值误触发
         if (_sleeping) _exitSleep();
         _idleStreakTicks = 0;
         _wasIdling = false;
