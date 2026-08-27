@@ -110,7 +110,8 @@ class PetConfig {
   File get file => _file ??= File(path);
 
   Map<String, dynamic> _defaults() => {
-    '_说明': 'Amadeus 桌面 Agent 动态配置。activityAwareness 为内置活动感知；proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠；appearance 为形象与气泡；ai 为对话模型；log 为日志；window 为窗口行为。设置修改后即时生效。',
+    '_说明':
+        'Amadeus 桌面 Agent 动态配置。activityAwareness 为内置活动感知；proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠；appearance 为形象与气泡；ai 为对话模型；log 为日志；window 为窗口行为。设置修改后即时生效。',
     'appearance': {
       'modelScale': 1.0,
       'displayWidth': 440,
