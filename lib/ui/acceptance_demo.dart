@@ -13,7 +13,11 @@ import 'settings_panel.dart';
 /// The native release executable still renders the real settings widgets;
 /// only the data source and automatic navigation are synthetic.
 class AcceptanceDemoApp extends StatefulWidget {
-  const AcceptanceDemoApp({super.key});
+  const AcceptanceDemoApp({super.key, this.targetPlatform});
+
+  static const surfaceKey = ValueKey('acceptance-demo-surface');
+
+  final TargetPlatform? targetPlatform;
 
   @override
   State<AcceptanceDemoApp> createState() => _AcceptanceDemoAppState();
@@ -71,16 +75,25 @@ class _AcceptanceDemoAppState extends State<AcceptanceDemoApp> {
 
   @override
   Widget build(BuildContext context) {
+    final lightTheme = AmadeusTheme.light().copyWith(
+      platform: widget.targetPlatform,
+    );
+    final darkTheme = AmadeusTheme.dark().copyWith(
+      platform: widget.targetPlatform,
+    );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Amadeus · Acceptance Demo',
-      theme: AmadeusTheme.light(),
-      darkTheme: AmadeusTheme.dark(),
+      theme: lightTheme,
+      darkTheme: darkTheme,
       themeMode: ThemeMode.light,
-      home: SettingsPage(
-        config: _config,
-        activityHistory: _history,
-        demoCycleInterval: const Duration(seconds: 4),
+      home: RepaintBoundary(
+        key: AcceptanceDemoApp.surfaceKey,
+        child: SettingsPage(
+          config: _config,
+          activityHistory: _history,
+          demoCycleInterval: const Duration(seconds: 4),
+        ),
       ),
     );
   }

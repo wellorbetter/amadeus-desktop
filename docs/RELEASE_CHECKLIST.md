@@ -10,6 +10,9 @@
 - [ ] 数据恢复：损坏的配置、记忆库和活动库先生成 `.corrupt-*` 备份，再创建可用新库
 - [ ] Windows x64 release 构建并上传 artifact
 - [ ] macOS release 构建并上传未签名 `.app` artifact
+- [ ] Ubuntu release 构建、完整入口 smoke、隔离验收游览录屏并上传 artifact
+- [ ] Windows 完整入口 smoke 通过；Windows/macOS 平台语义 UI 模拟视频均生成
+- [ ] macOS GUI 进程 smoke 与托管 runner 原生录屏作为尽力项单独报告，不冒充真机验收
 
 ## Windows 真机
 
@@ -30,6 +33,14 @@
 - [ ] `codesign --verify --deep --strict Amadeus.app` 通过
 - [ ] Developer ID 签名后提交 notarization，并完成 stapling
 - [ ] 在一台未安装开发证书的干净 Mac 上通过 Gatekeeper 启动
+
+## Ubuntu 真机
+
+- [ ] 当前 Ubuntu LTS 在 X11 和 Wayland 会话中各完成一次首次启动、设置、托盘与退出流程
+- [ ] Agent 对话、记忆、触发设置和本地数据库读写正常
+- [ ] 明确显示 Flutter 形象回退界面，不误称 Linux 已支持 Live2D WebView
+- [ ] 活动工作台明确提示 Linux 原生 Computer History 传感器尚不可用
+- [ ] `.tar.gz`/包管理器产物携带 GTK、libsecret 与 AppIndicator 运行依赖说明
 
 ## 发布与回滚
 

@@ -5,21 +5,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path (Split-Path $OutputPath) | Out-Null
-$env:AMADEUS_ACCEPTANCE_DEMO = "1"
 
-$amadeusRecorder = Start-Process ffmpeg -PassThru -NoNewWindow -ArgumentList @(
-  "-y", "-loglevel", "warning", "-f", "gdigrab", "-framerate", "15",
-  "-i", "desktop", "-t", "28", "-c:v", "libx264", "-preset", "veryfast",
-  "-pix_fmt", "yuv420p", $OutputPath
-)
-Start-Sleep -Seconds 1
+$env:AMADEUS_ACCEPTANCE_DEMO = "1"
 $amadeusApp = Start-Process $AppPath -PassThru -ArgumentList "--acceptance-demo"
 
 try {
-  Start-Sleep -Seconds 6
+  Start-Sleep -Seconds 4
   if ($amadeusApp.HasExited) {
     throw "Amadeus exited before the startup smoke window completed."
   }
+  $amadeusRecorder = Start-Process ffmpeg -PassThru -NoNewWindow -ArgumentList @(
+    "-y", "-loglevel", "warning", "-f", "gdigrab", "-framerate", "15",
+    "-i", "desktop", "-t", "28", "-c:v", "libx264", "-preset", "veryfast",
+    "-pix_fmt", "yuv420p", $OutputPath
+  )
   $amadeusRecorder.WaitForExit()
   if ($amadeusRecorder.ExitCode -ne 0) {
     throw "ffmpeg desktop capture exited with $($amadeusRecorder.ExitCode)."

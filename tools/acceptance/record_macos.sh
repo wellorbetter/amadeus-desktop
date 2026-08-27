@@ -14,7 +14,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-sleep 6
+sleep 4
 kill -0 "$amadeus_app_pid"
 
 # macOS requires Screen Recording consent even for CI shells. This succeeds on

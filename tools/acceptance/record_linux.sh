@@ -22,15 +22,14 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 2
+AMADEUS_ACCEPTANCE_DEMO=1 "$app_path" --acceptance-demo &
+amadeus_app_pid=$!
+sleep 4
+kill -0 "$amadeus_app_pid"
+
 ffmpeg -y -loglevel warning -f x11grab -framerate 15 \
   -video_size 1280x800 -i "$display_id" -t 28 \
   -c:v libx264 -preset veryfast -pix_fmt yuv420p "$output_path" &
 amadeus_recorder_pid=$!
-
-sleep 1
-AMADEUS_ACCEPTANCE_DEMO=1 "$app_path" --acceptance-demo &
-amadeus_app_pid=$!
-sleep 6
-kill -0 "$amadeus_app_pid"
 wait "$amadeus_recorder_pid"
 test -s "$output_path"

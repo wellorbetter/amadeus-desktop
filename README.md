@@ -5,7 +5,7 @@
 <h1 align="center">Amadeus · 个人桌面 Agent</h1>
 
 <p align="center">
-  本地优先、可主动交互、拥有用户可控记忆的 Windows / macOS 桌面伴侣
+  本地优先、可主动交互、拥有用户可控记忆的 Windows / macOS 桌面伴侣，提供 Ubuntu 预览版
   <br>
   <b>Flutter</b> · <b>Rust</b> · <b>Live2D</b> · <b>Built-in activity awareness</b> · <b>Local memory</b>
 </p>
@@ -60,6 +60,7 @@ Live2D 模型与 `soul.md` 分离：更换形象不会偷偷改写人格，修�
 - Cubism 2.1 (`*.model.json`) 本地模型包导入与依赖校验
 - Windows WebView2 与 macOS WKWebView 渲染
 - Windows / macOS 托盘、透明窗口、多窗口设置页
+- Ubuntu 原生构建、托盘与 Flutter 形象回退界面（预览）
 - 统一的引导页与桌面工作台式设置界面
 
 ## 隐私边界
@@ -74,7 +75,7 @@ Live2D 模型与 `soul.md` 分离：更换形象不会偷偷改写人格，修�
 | 隐私过滤后的活动聚合摘要 | 短期上下文 | 启用观察能力且有可用数据时 |
 | 经审核的长期记忆 | 本地 SQLite | 仅在相关对话召回时 |
 
-Windows 延续旧版目录：`%APPDATA%\timepet`。macOS 使用 `~/Library/Application Support/Amadeus`。
+Windows 延续旧版目录：`%APPDATA%\timepet`。macOS 使用 `~/Library/Application Support/Amadeus`；Linux 使用 `${XDG_DATA_HOME:-~/.local/share}/amadeus`。
 
 ## 运行与配置
 
@@ -111,7 +112,7 @@ ChatGPT / Codex 订阅登录不能直接作为第三方桌面应用的 API 凭�
 | Agent Runtime | 已实现 | 组合身份、人格、工作记忆、语义记忆与单次上下文 |
 | Memory | 已实现 | 对话工作记忆与经审核的用户长期记忆；可查看、编辑、删除 |
 | Trigger | 已实现 | 候选生成、策略抑制、优先级竞争、交付确认与审计 |
-| Computer History | 已实现基础能力 | Windows/macOS 活动采集、短期事件、会话投影与基础统计 |
+| Computer History | 已实现基础能力 | Windows/macOS 活动采集、短期事件、会话投影与基础统计；Linux 暂无原生活动传感器 |
 | Skill | 尚未实现 runtime | 只保留未来扩展位置，不进入当前能力声明 |
 | MCP | 尚未实现 | 当前没有工具发现、权限或调用运行时 |
 | Evolve | 尚未实现 | 当前不会自主修改人格、策略或代码 |
@@ -120,7 +121,7 @@ Amadeus 内化的是 Computer History/活动感知能力，不是整个 TimeTrac
 
 ## 构建
 
-环境要求：Flutter stable 与 Rust stable。Windows 需要 Visual Studio Desktop C++，macOS 需要当前 Xcode；构建脚本会为当前 macOS 架构准备对应的 Rust target。
+环境要求：Flutter stable 与 Rust stable。Windows 需要 Visual Studio Desktop C++，macOS 需要当前 Xcode；Ubuntu 需要 Flutter Linux 桌面依赖、GTK 3、libsecret 与 Ayatana AppIndicator。
 
 ```bash
 flutter pub get
@@ -132,9 +133,14 @@ flutter build windows --release
 
 # macOS
 flutter build macos --release
+
+# Ubuntu / Linux preview
+flutter build linux --release
 ```
 
-GitHub Actions 会分别在 Windows 和 macOS runner 上生成构建产物。CI 的 macOS artifact 是未公证的开发产物；公开分发仍需使用 Apple Developer ID 签名并提交 notarization，否则 Gatekeeper 会提示无法验证开发者。
+GitHub Actions 会在原生 Windows、macOS 和 Ubuntu runner 上完成 Release 构建；Windows/Ubuntu 还会强制执行完整入口 smoke。三端都会用隔离的合成数据运行真实设置组件并生成验收游览：Ubuntu 是虚拟桌面原生录屏，Windows/macOS 提供 runner 上按对应平台语义渲染的 UI 模拟视频，托管 runner 的原生桌面录屏作为尽力项另行上传。macOS 托管环境无法可靠提供 WindowServer/录屏授权，因此 GUI 进程 smoke 是尽力项，仍需真机清单兜底。CI 的 macOS artifact 是未公证的开发产物；公开分发仍需使用 Apple Developer ID 签名并提交 notarization，否则 Gatekeeper 会提示无法验证开发者。
+
+可重复的本机 smoke 与录屏命令见 [`tools/acceptance/README.md`](tools/acceptance/README.md)。验收模式使用临时配置、临时活动库和虚构 API Key，不读取或修改普通用户的配置、记忆、模型与凭据。
 
 发版前的签名、权限和真机验证见 [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)。
 
@@ -151,13 +157,15 @@ GitHub Actions 会分别在 Windows 和 macOS runner 上生成构建产物。CI 
 | `lib/services/trigger_engine.dart` | 主动性与打扰控制 |
 | `lib/ui/` | 引导、设置、气泡与输入 |
 | `assets/web/` | 跨平台 Live2D Web 渲染层 |
-| `windows/` / `macos/` | 桌面平台工程 |
+| `windows/` / `macos/` / `linux/` | 桌面平台工程 |
 
 ## 活动感知的边界
 
 这一层参考了 Computer History 的可控性设计：明确开启状态、托盘暂停、数据源排除、短期原始记录和可清除时间线。数据流借鉴 Kafka 的事件日志与投影思想，但不引入 Kafka 运行时：原生层采集最小信号，Rust 在写入前做空闲、自身进程与排除项分类，SQLite `activity_events` 保存可按保留期清除的追加事件，Flutter 再把它投影为 `usage_sessions`、七日节律与对话所需的聚合上下文。
 
 当前实现刻意保持窄能力面：每 10 秒只向原生层询问前台应用标识与全局空闲秒数，不请求屏幕录制，也不读取窗口标题、文档内容、浏览历史或按键内容。Windows 使用 Win32 前台进程与 `GetLastInputInfo`；macOS 使用 `NSWorkspace.frontmostApplication` 与 `CGEventSource` 空闲时间。
+
+Ubuntu 当前是诚实的预览层级：Agent 对话、设置、记忆、触发策略、托盘与本地数据层可以构建和启动；由于项目现用 WebView 方案没有 Linux 后端，形象区域显示原创 Flutter 回退界面，Live2D 导入渲染与原生 Computer History 采集暂不可用。
 
 ## License
 

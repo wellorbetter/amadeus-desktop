@@ -17,19 +17,21 @@ void main(List<String> args) async {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
-      FlutterError.onError = (details) {
-        PetLog.e('FlutterError: ${details.exception}\n${details.stack}');
-      };
-      PetLog.i('main: boot');
-
       final acceptanceDemo =
           args.contains('--acceptance-demo') ||
           Platform.environment['AMADEUS_ACCEPTANCE_DEMO'] == '1';
       if (acceptanceDemo) {
-        PetLog.i('main: isolated acceptance demo');
+        // Keep release acceptance hermetic: do not initialize the normal
+        // logger, config, secrets, tray, or multi-window services.
+        FlutterError.onError = FlutterError.presentError;
         runApp(const AcceptanceDemoApp());
         return;
       }
+
+      FlutterError.onError = (details) {
+        PetLog.e('FlutterError: ${details.exception}\n${details.stack}');
+      };
+      PetLog.i('main: boot');
 
       // 区分主窗口（桌宠）与独立设置窗口
       String windowId = '';

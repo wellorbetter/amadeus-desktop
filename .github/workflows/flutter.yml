@@ -49,6 +49,19 @@ jobs:
       - run: flutter config --enable-windows-desktop
       - run: flutter pub get
       - run: flutter build windows --release
+      - name: Smoke full Windows release
+        shell: pwsh
+        run: ./tools/acceptance/smoke_windows.ps1 -AppPath build/windows/x64/runner/Release/timepet.exe
+      - name: Install FFmpeg for Windows acceptance video
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+      - name: Render Windows UI simulation frames
+        shell: pwsh
+        run: |
+          $env:AMADEUS_ACCEPTANCE_FRAMES_DIR = "build/acceptance/windows-frames"
+          $env:AMADEUS_ACCEPTANCE_PLATFORM = "windows"
+          flutter test test/acceptance_capture_test.dart
+          ./tools/acceptance/frames_to_video.ps1 -FramesPath build/acceptance/windows-frames -OutputPath build/acceptance/amadeus-windows-simulation.mp4
       - name: Record Windows release acceptance tour
         continue-on-error: true
         shell: pwsh
@@ -65,6 +78,12 @@ jobs:
           name: amadeus-windows-acceptance-video
           path: build/acceptance/amadeus-windows.mp4
           if-no-files-found: warn
+      - name: Upload Windows UI simulation video
+        uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-windows-ui-simulation-video
+          path: build/acceptance/amadeus-windows-simulation.mp4
+          if-no-files-found: error
 
   macos:
     name: Build macOS
@@ -80,7 +99,18 @@ jobs:
       - run: flutter config --enable-macos-desktop
       - run: flutter pub get
       - run: flutter build macos --release
-      - name: Smoke launch and attempt macOS acceptance recording
+      - name: Attempt full macOS GUI process smoke
+        continue-on-error: true
+        run: ./tools/acceptance/smoke_macos.sh build/macos/Build/Products/Release/Amadeus.app
+      - name: Install FFmpeg for macOS acceptance video
+        run: brew install ffmpeg
+      - name: Render macOS UI simulation frames
+        run: |
+          AMADEUS_ACCEPTANCE_FRAMES_DIR=build/acceptance/macos-frames \
+          AMADEUS_ACCEPTANCE_PLATFORM=macos \
+          flutter test test/acceptance_capture_test.dart
+          ./tools/acceptance/frames_to_video.sh build/acceptance/macos-frames build/acceptance/amadeus-macos-simulation.mp4
+      - name: Attempt macOS acceptance recording
         continue-on-error: true
         run: ./tools/acceptance/record_macos.sh build/macos/Build/Products/Release/Amadeus.app build/acceptance/amadeus-macos.mov
       - uses: actions/upload-artifact@v4
@@ -95,6 +125,12 @@ jobs:
           name: amadeus-macos-acceptance-video
           path: build/acceptance/amadeus-macos.mov
           if-no-files-found: warn
+      - name: Upload macOS UI simulation video
+        uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-macos-ui-simulation-video
+          path: build/acceptance/amadeus-macos-simulation.mp4
+          if-no-files-found: error
 
   linux:
     name: Build and record Ubuntu
@@ -114,6 +150,8 @@ jobs:
       - run: flutter config --enable-linux-desktop
       - run: flutter pub get
       - run: flutter build linux --release
+      - name: Smoke full Ubuntu release
+        run: ./tools/acceptance/smoke_linux.sh build/linux/x64/release/bundle/amadeus
       - name: Record Ubuntu release acceptance tour
         run: ./tools/acceptance/record_linux.sh build/linux/x64/release/bundle/amadeus build/acceptance/amadeus-ubuntu.mp4
       - uses: actions/upload-artifact@v4

@@ -5,7 +5,7 @@
 <h1 align="center">Amadeus · Personal Desktop Agent</h1>
 
 <p align="center">
-A local-first Flutter + Rust desktop companion with user-controlled memory for Windows and macOS
+A local-first Flutter + Rust desktop companion with user-controlled memory for Windows and macOS, plus an Ubuntu preview
 </p>
 
 <p align="center"><a href="README.md">中文</a></p>
@@ -56,6 +56,7 @@ Amadeus internalizes only TimeTrace's activity-awareness capability. The full St
 - Local Cubism 2.1 model import with dependency validation
 - WebView2 on Windows and WKWebView on macOS
 - Cross-platform tray, transparent pet window, and a dedicated settings window
+- Native Ubuntu build with tray support and a Flutter avatar fallback (preview)
 - Rights-aware onboarding and a cohesive desktop settings experience
 
 ## Privacy and rights
@@ -64,11 +65,11 @@ Amadeus never bundles or downloads third-party character models or personas. The
 
 Amadeus does not collect screenshots, audio, window titles, file paths, browser history, or typed content. Frontmost-app and idle events remain in a separate local database for 48 hours by default. When observation is enabled and data is available, online requests include a compact, privacy-filtered activity aggregate; the model is instructed to use it only when naturally relevant.
 
-Windows keeps the legacy `%APPDATA%\timepet` directory. macOS uses `~/Library/Application Support/Amadeus`.
+Windows keeps the legacy `%APPDATA%\timepet` directory. macOS uses `~/Library/Application Support/Amadeus`; Linux uses `${XDG_DATA_HOME:-~/.local/share}/amadeus`.
 
 ## Build
 
-Use Flutter stable and Rust stable. Windows requires Visual Studio Desktop C++; macOS requires Xcode. The build prepares the Rust target for the active macOS architecture.
+Use Flutter stable and Rust stable. Windows requires Visual Studio Desktop C++, macOS requires Xcode, and Ubuntu requires Flutter's Linux desktop dependencies, GTK 3, libsecret, and Ayatana AppIndicator.
 
 ```bash
 flutter pub get
@@ -77,9 +78,12 @@ flutter test
 
 flutter build windows --release
 flutter build macos --release
+flutter build linux --release
 ```
 
-GitHub Actions validates analysis/tests and builds on native Windows and macOS runners. The macOS CI artifact is not notarized; public distribution still requires Developer ID signing and Apple notarization to avoid Gatekeeper warnings.
+GitHub Actions validates analysis/tests and builds release artifacts on native Windows, macOS, and Ubuntu runners; complete-entry smoke is required on Windows and Ubuntu. All three produce an acceptance tour from the real settings widgets and isolated synthetic data. Ubuntu uses native virtual-desktop capture, while Windows/macOS publish platform-rendered UI simulation videos and attempt native desktop capture separately. Hosted macOS does not reliably expose WindowServer or interactive Screen Recording consent, so its GUI-process smoke remains best-effort and the real-device checklist is still required. The macOS CI artifact is not notarized; public distribution still requires Developer ID signing and Apple notarization.
+
+See [`tools/acceptance/README.md`](tools/acceptance/README.md) for reproducible local smoke and recording commands. Acceptance mode uses temporary config/activity storage and a fake API key; it does not read or mutate regular user config, memory, models, or credentials.
 
 ## Architecture
 
@@ -94,12 +98,15 @@ GitHub Actions validates analysis/tests and builds on native Windows and macOS r
 | `trigger_engine.dart` | Initiative and interruption control |
 | `lib/ui/` | Onboarding, settings, chat bubble, and input |
 | `assets/web/` | Cross-platform Live2D web renderer |
+| `windows/`, `macos/`, `linux/` | Native desktop runners |
 
 ## Activity-awareness boundary
 
 The control model is inspired by Computer History: visible state, tray pause, source exclusions, short-lived raw events, and a clearable timeline. Its data flow borrows Kafka's event-log and projection ideas without adding a Kafka runtime: the native layer captures the minimum signal, Rust classifies idle/self/excluded activity before persistence, SQLite `activity_events` holds the retention-bound append-only stream, and Flutter projects it into `usage_sessions`, seven-day rhythms, and compact conversational context.
 
 The implementation intentionally stays narrow. Every 10 seconds it asks the native layer only for the frontmost application identity and global idle duration; it does not request screen recording, window titles, document content, browser history, or keyboard content. Windows uses the foreground Win32 process and `GetLastInputInfo`; macOS uses `NSWorkspace.frontmostApplication` and `CGEventSource` idle time.
+
+Ubuntu is deliberately labeled preview quality. Agent chat, settings, memory, trigger policy, tray, and local-data layers build and start. The current WebView stack has no Linux backend, so the avatar surface uses an original Flutter fallback; imported Live2D rendering and native Computer History capture are not yet available there.
 
 ## License
 
