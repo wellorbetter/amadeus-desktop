@@ -31,7 +31,7 @@ flowchart LR
 - **上下文**：只把本次交互需要的信息组合起来，不把每次观察都当成永久记忆
 - **主动性**：整点、久坐、切窗激增、空闲归来、专注与记忆关心等触发器
 - **交互外形**：透明窗口、托盘、Live2D、气泡与输入栏
-- **记忆**：近期对话、结构化日事实和经审核的长期记忆，均可由用户清除
+- **记忆**：近期对话和经审核的长期记忆；Computer History 不复制进长期记忆库
 
 活动感知可以暂停或完全关闭；对话、人格与长期记忆不会因此失效。
 
@@ -56,7 +56,7 @@ Live2D 模型与 `soul.md` 分离：更换形象不会偷偷改写人格，修�
 - 可配置主动触发、频率上限、忙时降噪与空闲休眠
 - Windows / macOS 内置活动感知：前台应用、空闲检测与本地时间线
 - 托盘一键暂停、应用排除列表、1–168 小时保留期与按范围清除
-- 本地 SQLite 长期记忆与隐私过滤后的活动日聚合
+- 本地 SQLite 工作记忆与经审核的长期记忆
 - Cubism 2.1 (`*.model.json`) 本地模型包导入与依赖校验
 - Windows WebView2 与 macOS WKWebView 渲染
 - Windows / macOS 托盘、透明窗口、多窗口设置页
@@ -102,6 +102,22 @@ ChatGPT / Codex 订阅登录不能直接作为第三方桌面应用的 API 凭�
 
 主动互动采用候选编排而不是顺序匹配：健康关心、状态转场、关系互动和环境搭话先各自产生候选，再经过启动保护、用户互动后的全局间隔、每小时上限、独立冷却、忙碌模式与安静时段筛选，最后只选择一个最高价值候选。重启后频率与独立冷却仍从本地审计记录恢复；原始活动事件只参与短期判断，不会自动晋升为长期记忆。
 
+只有已经展示给用户的主动互动才记为 `fired` 并消耗频率与冷却；生成或展示失败记录为 `failed`，不会吞掉下一次有效互动。
+
+## 能力分层与实现状态
+
+| 层 | 当前状态 | 边界 |
+| --- | --- | --- |
+| Agent Runtime | 已实现 | 组合身份、人格、工作记忆、语义记忆与单次上下文 |
+| Memory | 已实现 | 对话工作记忆与经审核的用户长期记忆；可查看、编辑、删除 |
+| Trigger | 已实现 | 候选生成、策略抑制、优先级竞争、交付确认与审计 |
+| Computer History | 已实现基础能力 | Windows/macOS 活动采集、短期事件、会话投影与基础统计 |
+| Skill | 尚未实现 runtime | 只保留未来扩展位置，不进入当前能力声明 |
+| MCP | 尚未实现 | 当前没有工具发现、权限或调用运行时 |
+| Evolve | 尚未实现 | 当前不会自主修改人格、策略或代码 |
+
+Amadeus 内化的是 Computer History/活动感知能力，不是整个 TimeTrace 产品。TimeTrace 的 Diary、Project / Session 和 AI Recap / Insight 仍属于独立产品；旧 TimeTrace 数据在这里仅作为迁移兼容观察源。AI Recap 是时间数据分析，不是 Amadeus 的人格 Agent。
+
 ## 构建
 
 环境要求：Flutter stable 与 Rust stable。Windows 需要 Visual Studio Desktop C++，macOS 需要当前 Xcode；构建脚本会为当前 macOS 架构准备对应的 Rust target。
@@ -127,6 +143,7 @@ GitHub Actions 会分别在 Windows 和 macOS runner 上生成构建产物。CI 
 | 目录 | 作用 |
 | --- | --- |
 | `lib/services/observation_source.dart` | Agent 观察能力边界 |
+| `lib/services/agent_context.dart` | 身份、记忆与 Lived Context 的请求级编排边界 |
 | `lib/services/activity_history.dart` | 内置活动采集、短期 SQLite 时间线与清除策略 |
 | `rust/` | 跨端隐私分类与专注指标核心，通过稳定 C ABI 接入 Flutter runner |
 | `lib/services/tt_api.dart` | 活动聚合与旧 TimeTrace 兼容适配 |

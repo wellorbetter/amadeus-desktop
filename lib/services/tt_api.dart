@@ -119,6 +119,8 @@ class TtApi implements ObservationSource {
   String _topApp = '-';
   String _lastActive = '-';
   String _nowHour = '';
+  int _currentIdleSeconds = 0;
+  bool _currentlyIdle = false;
   DateTime? _lastSync;
   DateTime? _lastHistoryAt; // 历史日聚合缓存时间（5 分钟刷一次）
   final List<DayInfo> _history = [];
@@ -135,6 +137,8 @@ class TtApi implements ObservationSource {
   int get idleMinutes => _idleMin;
   int get switches => _switches;
   String get foregroundApp => _foreground;
+  int get currentIdleSeconds => _currentIdleSeconds;
+  bool get currentlyIdle => _currentlyIdle;
 
   void start() => ActivityHistory.instance.start();
   void stop() => ActivityHistory.instance.stop();
@@ -159,6 +163,10 @@ class TtApi implements ObservationSource {
       return false;
     }
     await ActivityHistory.instance.capture();
+    _currentIdleSeconds = ActivityHistory.instance.currentIdleSeconds;
+    _currentlyIdle = ActivityHistory.instance.currentlyIdle;
+    final currentIdleSeconds = _currentIdleSeconds;
+    final currentlyIdle = _currentlyIdle;
 
     // The built-in short-lived activity database is now the primary source.
     // Legacy TimeTrace files remain later candidates for seamless migration.
@@ -166,6 +174,11 @@ class TtApi implements ObservationSource {
       _lastSync = DateTime.now();
       return true;
     }
+
+    // An empty local timeline clears stale aggregates, but the direct native
+    // idle reading is still valid and must survive the legacy HTTP fallback.
+    _currentIdleSeconds = currentIdleSeconds;
+    _currentlyIdle = currentlyIdle;
 
     var ok = false;
     try {
@@ -225,13 +238,16 @@ class TtApi implements ObservationSource {
     _topApp = '-';
     _lastActive = '-';
     _nowHour = '';
+    _currentIdleSeconds = 0;
+    _currentlyIdle = false;
     _lastSync = null;
     _lastHistoryAt = null;
     _history.clear();
   }
 
   /// Reads Amadeus' built-in event store first, then optional legacy TimeTrace
-  /// databases. The old HTTP bridge is used only when no local database exists.
+  /// databases. The old HTTP bridge is used when local stores have no usable
+  /// aggregate yet, which keeps a fresh install compatible during warm-up.
   bool _refreshFromLocalDatabase() {
     var foundDatabase = false;
     for (final candidate in AppPaths.timeTraceDatabases) {
@@ -331,7 +347,9 @@ class TtApi implements ObservationSource {
       }
     }
     if (foundDatabase) _clear();
-    return foundDatabase;
+    // An empty built-in database must not suppress the legacy HTTP migration
+    // source or make zero values look like a successful observation.
+    return false;
   }
 
   ResultSet _sessions(Database db, String date) => db.select(
@@ -382,7 +400,8 @@ class TtApi implements ObservationSource {
   String historySummary() {
     if (_history.isEmpty) return '';
     final sb = StringBuffer();
-    for (final d in _history.take(3)) {
+    final recent = _history.reversed.take(3).toList().reversed;
+    for (final d in recent) {
       // 语料只带近 3 天，控制 system prompt 体积（省 token）
       sb.writeln(
         '${d.readableDate}（${d.date}）：活跃 ${d.activeText}'
@@ -392,6 +411,20 @@ class TtApi implements ObservationSource {
       );
     }
     return sb.toString().trim();
+  }
+
+  double get lateNightRatio {
+    if (_history.isEmpty) return 0;
+    final recent = _history.reversed.take(7);
+    var days = 0;
+    var lateNights = 0;
+    for (final day in recent) {
+      days++;
+      if (day.peakHours.any((item) => item.hour >= 23 || item.hour < 5)) {
+        lateNights++;
+      }
+    }
+    return days == 0 ? 0 : lateNights / days;
   }
 
   /// 生成给 AI 的聚合摘要（只含统计数据，不含任何路径/截图）。

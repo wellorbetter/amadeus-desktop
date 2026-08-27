@@ -489,22 +489,43 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         const SizedBox(height: 18),
         _SettingsCard(
-          title: '产品结构',
-          subtitle: '观察能力已经进入 Amadeus 本体，TimeTrace 仅用于兼容旧数据。',
+          title: '能力分层',
+          subtitle: '明确显示已经运行的能力与尚未安装的扩展，不让人格假装“什么都会”。',
           child: Column(
             children: const [
               _ArchitectureRow(
-                icon: Icons.desktop_windows_outlined,
-                title: 'Amadeus 桌面端',
-                body: '窗口、触发器、记忆、人格和 AI 连接',
-                badge: '独立应用',
+                icon: Icons.hub_outlined,
+                title: 'Agent Runtime',
+                body: '身份、人格、工作记忆、语义记忆与单次上下文编排',
+                badge: '运行中',
               ),
               Divider(height: 24),
               _ArchitectureRow(
                 icon: Icons.timeline_rounded,
-                title: '内置活动感知',
-                body: '前台应用、活跃与空闲事件；不采集截图、声音和输入内容',
-                badge: '本机能力',
+                title: 'Computer History',
+                body: '短期活动事件与统计，只作为 Lived Context，不写入长期记忆',
+                badge: '运行中',
+              ),
+              Divider(height: 24),
+              _ArchitectureRow(
+                icon: Icons.account_tree_outlined,
+                title: 'Trigger Runtime',
+                body: '候选、抑制、竞争、交付与本机审计分开处理',
+                badge: '运行中',
+              ),
+              Divider(height: 24),
+              _ArchitectureRow(
+                icon: Icons.extension_outlined,
+                title: 'Skill · MCP · Evolve',
+                body: '保留扩展层；当前没有安装 runtime，不会写进能力声明',
+                badge: '待实现',
+              ),
+              Divider(height: 24),
+              _ArchitectureRow(
+                icon: Icons.history_toggle_off_rounded,
+                title: 'TimeTrace 兼容边界',
+                body: '只读取旧活动数据；Diary、Project / Session 与 AI Recap 仍属于 TimeTrace',
+                badge: '独立产品',
               ),
             ],
           ),
@@ -724,7 +745,7 @@ class _SettingsPageState extends State<SettingsPage> {
       const SizedBox(height: 14),
       _SettingsCard(
         title: '为什么主动开口',
-        subtitle: '每次真正触发都会在本机留下原因；频率限制未通过时不会请求 AI。',
+        subtitle: '只有真正展示给你的互动才消耗冷却；生成失败会单独标记。',
         child: _proactiveAudit(),
       ),
       const SizedBox(height: 14),
@@ -1071,17 +1092,35 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           if (events.isNotEmpty) const Divider(height: 24),
           for (var index = 0; index < events.length; index++) ...[
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              leading: const Icon(Icons.bolt_rounded, size: 18),
-              title: Text('${events[index]['label']}'),
-              subtitle: Text(
-                '${events[index]['reason']}',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: Text(_shortTime('${events[index]['ts']}')),
+            Builder(
+              builder: (context) {
+                final delivered = events[index]['state'] == 'fired';
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: Icon(
+                    delivered
+                        ? Icons.bolt_rounded
+                        : Icons.error_outline_rounded,
+                    size: 18,
+                    color: delivered ? null : Theme.of(context).colorScheme.error,
+                  ),
+                  title: Text('${events[index]['label']}'),
+                  subtitle: Text(
+                    '${events[index]['reason']}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(delivered ? '已展示' : '未展示'),
+                      Text(_shortTime('${events[index]['ts']}')),
+                    ],
+                  ),
+                );
+              },
             ),
             if (index < events.length - 1) const Divider(height: 1),
           ],

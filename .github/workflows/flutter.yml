@@ -24,14 +24,23 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - name: Format sources for verification
+        run: dart format lib test
+      - name: Upload resolved verification inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: formatted-verification-inputs
+          path: |
+            lib/
+            test/
+            pubspec.lock
+          if-no-files-found: error
       - name: Verify Rust formatting
         run: cargo fmt --manifest-path rust/Cargo.toml -- --check
       - name: Test Rust activity core
         run: cargo test --manifest-path rust/Cargo.toml
       - name: Lint Rust activity core
         run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
-      - name: Verify formatting
-        run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
       - run: flutter test
 

@@ -41,6 +41,18 @@ void main() {
       database.proactiveCountSince(at.subtract(const Duration(seconds: 1))),
       1,
     );
+    database.recordProactiveEvent(
+      triggerId: 'memory_nudge',
+      label: '记忆关心',
+      reason: '生成失败，未展示',
+      state: 'failed',
+      at: at.add(const Duration(minutes: 1)),
+    );
+    expect(database.latestProactiveAt(triggerId: 'memory_nudge'), isNull);
+    expect(
+      database.proactiveCountSince(at.subtract(const Duration(seconds: 1))),
+      1,
+    );
 
     database.setAgentState('observing', '正在观察', at: at);
     expect(database.agentState()?['state'], 'observing');
@@ -90,5 +102,41 @@ void main() {
     final unchanged = sqlite3.open(path);
     addTearDown(unchanged.close);
     expect(unchanged.userVersion, PetDb.schemaVersion + 10);
+  });
+
+  test('v2 activity-derived facts are removed from long-term memory', () {
+    final root = Directory.systemTemp.createTempSync('amadeus-db-test-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final path = '${root.path}/mem.db';
+    final legacy = sqlite3.open(path)
+      ..execute(
+        'CREATE TABLE daily_facts('
+        'date TEXT PRIMARY KEY, active_min INTEGER, idle_min INTEGER, '
+        'top_apps TEXT, peak_hours TEXT, diary_has INTEGER)',
+      )
+      ..execute(
+        "INSERT INTO daily_facts VALUES('2026-08-26', 300, 20, '[]', '[]', 0)",
+      )
+      ..execute(
+        'CREATE TABLE memories('
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, '
+        'category TEXT NOT NULL, importance INTEGER NOT NULL, ts TEXT NOT NULL, '
+        'source TEXT NOT NULL, active INTEGER NOT NULL)',
+      )
+      ..execute(
+        "INSERT INTO memories(content, category, importance, ts, source, active) "
+        "VALUES('保留这条用户记忆', 'fact', 3, '2026-08-26', 'audit', 1)",
+      );
+    legacy.userVersion = 2;
+    legacy.close();
+
+    final database = PetDb(pathOverride: path, migrateLegacy: false)..init();
+    addTearDown(database.dispose);
+
+    final tables = database.db.select(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'daily_facts'",
+    );
+    expect(tables, isEmpty);
+    expect(database.recentMemoryRows().single['content'], '保留这条用户记忆');
   });
 }

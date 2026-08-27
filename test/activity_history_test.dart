@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqlite3/sqlite3.dart';
 import 'package:timepet/services/activity_history.dart';
 import 'package:timepet/services/pet_config.dart';
 
@@ -101,6 +102,31 @@ void main() {
     expect(history.recentEpisodes(), isEmpty);
   });
 
+  test('current idle state uses the native duration, not daily totals', () {
+    final now = DateTime.now();
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Editor',
+        appId: 'editor.app',
+        idleSeconds: 900,
+        capturedAt: now,
+      ),
+    );
+    expect(history.currentlyIdle, isTrue);
+    expect(history.currentIdleSeconds, 900);
+
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Editor',
+        appId: 'editor.app',
+        idleSeconds: 0,
+        capturedAt: now.add(const Duration(seconds: 10)),
+      ),
+    );
+    expect(history.currentlyIdle, isFalse);
+    expect(history.currentIdleSeconds, 0);
+  });
+
   test('excluded apps and idle sessions do not appear in the timeline', () {
     PetConfig.instance.activityExcludedApps = const ['Password'];
     final start = DateTime(2026, 8, 27, 10);
@@ -154,5 +180,151 @@ void main() {
 
     history.clearSince(DateTime.now().subtract(const Duration(hours: 1)));
     expect(history.eventCount(), 0);
+  });
+
+  test('one session is split at local midnight', () {
+    final now = DateTime.now();
+    final yesterday = now.subtract(const Duration(days: 1));
+    final start = DateTime(
+      yesterday.year,
+      yesterday.month,
+      yesterday.day,
+      23,
+      59,
+    );
+    final nextDay = DateTime(start.year, start.month, start.day + 1);
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Editor',
+        appId: 'editor.app',
+        idleSeconds: 0,
+        capturedAt: start,
+      ),
+    );
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Editor',
+        appId: 'editor.app',
+        idleSeconds: 0,
+        capturedAt: nextDay.add(const Duration(minutes: 1)),
+      ),
+    );
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Terminal',
+        appId: 'terminal.app',
+        idleSeconds: 0,
+        capturedAt: nextDay.add(const Duration(minutes: 2)),
+      ),
+    );
+
+    final database = sqlite3.open(history.path, mode: OpenMode.readOnly);
+    addTearDown(database.close);
+    final rows = database.select(
+      "SELECT date, duration_secs FROM usage_sessions WHERE app_name = 'Editor' "
+      'ORDER BY started_at',
+    );
+    expect(rows, hasLength(2));
+    expect(rows[0]['duration_secs'], 60);
+    expect(rows[1]['duration_secs'], 120);
+    expect(rows[0]['date'], isNot(rows[1]['date']));
+  });
+
+  test('range clearing truncates a crossing session at the cutoff', () {
+    final now = DateTime.now();
+    final start = now.subtract(const Duration(hours: 2));
+    final cutoff = now.subtract(const Duration(hours: 1));
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Editor',
+        appId: 'editor.app',
+        idleSeconds: 0,
+        capturedAt: start,
+      ),
+    );
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Terminal',
+        appId: 'terminal.app',
+        idleSeconds: 0,
+        capturedAt: now,
+      ),
+    );
+
+    history.clearSince(cutoff);
+
+    final database = sqlite3.open(history.path, mode: OpenMode.readOnly);
+    addTearDown(database.close);
+    final rows = database.select(
+      "SELECT ended_at, duration_secs FROM usage_sessions WHERE app_name = 'Editor'",
+    );
+    expect(rows, hasLength(1));
+    expect(rows.single['ended_at'], cutoff.toIso8601String());
+    expect(rows.single['duration_secs'], 3600);
+  });
+
+  test('retention truncates a crossing session without retaining old time', () {
+    final now = DateTime.now();
+    final start = now.subtract(const Duration(hours: 3));
+    final cutoff = now.subtract(const Duration(hours: 2));
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Editor',
+        appId: 'editor.app',
+        idleSeconds: 0,
+        capturedAt: start,
+      ),
+    );
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Terminal',
+        appId: 'terminal.app',
+        idleSeconds: 0,
+        capturedAt: now.subtract(const Duration(hours: 1)),
+      ),
+    );
+
+    history.purge(retentionHours: 2, now: now);
+
+    final database = sqlite3.open(history.path, mode: OpenMode.readOnly);
+    addTearDown(database.close);
+    final rows = database.select(
+      "SELECT started_at, duration_secs FROM usage_sessions WHERE app_name = 'Editor'",
+    );
+    expect(rows, hasLength(1));
+    expect(rows.single['started_at'], cutoff.toIso8601String());
+    expect(rows.single['duration_secs'], 3600);
+  });
+
+  test('writer recreates its current session after another engine clears it', () {
+    final clearer = ActivityHistory(pathOverride: history.path)..init();
+    addTearDown(clearer.close);
+    final now = DateTime.now();
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Editor',
+        appId: 'editor.app',
+        idleSeconds: 0,
+        capturedAt: now,
+      ),
+    );
+
+    clearer.clearSince(null);
+    history.recordSnapshot(
+      ActivitySnapshot(
+        appName: 'Editor',
+        appId: 'editor.app',
+        idleSeconds: 0,
+        capturedAt: now.add(const Duration(seconds: 10)),
+      ),
+    );
+
+    expect(history.eventCount(), 1);
+    final database = sqlite3.open(history.path, mode: OpenMode.readOnly);
+    addTearDown(database.close);
+    expect(
+      database.select('SELECT COUNT(*) AS n FROM usage_sessions').first['n'],
+      1,
+    );
   });
 }

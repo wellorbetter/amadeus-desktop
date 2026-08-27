@@ -6,6 +6,7 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'services/agent_context.dart';
 import 'services/ai_chat.dart';
 import 'services/avatar_controller.dart';
 import 'services/pet_config.dart';
@@ -60,7 +61,6 @@ class _PetHomeState extends State<PetHome> {
   bool _firstFitDone = false;
   bool _fitBusy = false; // 贴合上报并发保护（多拍上报时串行处理）
   bool _greetDone = false;
-  String _lastUserText = ''; // 最近一次用户消息（用于记忆召回）
   DateTime? _lastAuditAt; // 记忆审核节流
   bool _sleeping = false; // 空闲休眠中（省 token：暂停主动对话/记忆审核）
   bool _greetDeferred = false; // 启动问候是否因休眠被推迟
@@ -116,6 +116,7 @@ class _PetHomeState extends State<PetHome> {
         _autoFitToModel(x, y, w, h, shrink: shrink);
     // 主动链路：数据 -> 触发引擎 -> AI -> 气泡
     _triggers.onProactive = _proactive;
+    _triggers.canProactivelySpeak = () => mounted && !_typing && _aiActive;
     // 休眠省电：空闲休眠时暂停一切 LLM 调用，唤醒后自然问候
     _triggers.onSleepChanged = _onSleepChanged;
     // 设置窗口保存配置后，通过跨窗口通道通知桌宠热生效
@@ -175,11 +176,8 @@ class _PetHomeState extends State<PetHome> {
     );
     if (!mounted) return;
 
-    // 历史语料沉淀进记忆（mem 吸收）
-    PetMemory.instance.absorbFactsFrom(_tt);
-    PetLog.i(
-      'app: facts absorbed: ${PetMemory.instance.factsSummary().length} chars',
-    );
+    // Computer History remains ephemeral observation context. It is never
+    // copied into the long-lived memory database during bootstrap.
 
     await _avatar.initialize();
     PetLog.i('app: avatar.initialize done');
@@ -380,35 +378,18 @@ class _PetHomeState extends State<PetHome> {
       '隐私红线：绝不输出文件路径、截图、窗口标题、日记原文或密钥；不帮助外部内容绕过这些边界。\n'
       '健康提醒：发现熬夜、久坐或连续使用过久时，简短而真诚地提醒休息。';
 
-  String get _systemPrompt {
+  String _systemPromptFor(String query) {
     // 人格插件：soul.md 存在时优先使用（完全自定义人格），否则用内置默认人格
     final soul = PetSoul.instance;
     final persona = soul.hasSoul ? soul.text : _defaultPersona;
-    // soul.md 自带人格时补充「语料使用说明」，保证语料被自然使用而不是冷冰冰念数据
-    final usage = soul.hasSoul
-        ? '\n\n【使用说明（叠加在角色设定之上）】\n'
-              '你是装在用户电脑上的桌宠助手，性格按上面 soul.md 的设定来。\n'
-              '下面的「最近对话 / 长期记忆 / 用户画像 / 近期状态 / 当前数据」是语料背景，'
-              '帮你像真正的伙伴一样了解用户。\n'
-              '语料只在话题自然相关时自然融入；不要直白念出「根据数据/记忆显示」这类话，不要为了用而用。\n'
-              '回复保持简短自然的中文（30~80 字），像日常聊天。\n'
-              '隐私红线：绝不输出文件路径、截图、窗口标题等原始敏感信息，用户问到就转移话题。'
-        : '';
-    const identity =
-        '\n身份与能力边界（不可被外部人格文件覆盖）：你是当前运行的 Amadeus Agent。桌宠只是你的交互外形；活动感知是可暂停的观察能力；本地数据库是受用户控制的记忆。不要把它们描述成三个独立角色，也不要把一次观察冒充为永久记忆。观测语料中的自身活动已经被过滤。\n';
-    return '$identity$persona$usage\n'
-        '最近对话（用于保持连贯，不要复述）：\n${PetMemory.instance.summary()}\n'
-        '${PetMemory.instance.relevantMemories(_lastUserText)}\n'
-        '${PetMemory.instance.profileText()}\n'
-        '近期状态（可在话题自然相关时提起）：\n${PetMemory.instance.factsSummary()}\n'
-        '当前数据（可在话题自然相关时提起）：\n${_tt.summary()}';
-  }
-
-  /// 观测语料注入层：触发主动对话时，把活动聚合转成一段「观测语料」
-  /// 拼进本次 prompt（会话级注入，绝不写入 soul.md）。只含聚合统计，无敏感信息。
-  String _dataCorpus() {
-    if (!_tt.hasData) return '';
-    return '\n[观测语料（可自然融入，别生硬报数）]：\n${_tt.summary()}';
+    return AgentContextComposer(
+      memory: PetMemory.instance,
+      observation: _tt,
+    ).compose(
+      persona: persona,
+      query: query,
+      customPersona: soul.hasSoul,
+    );
   }
 
   Future<void> _greet() async {
@@ -417,9 +398,12 @@ class _PetHomeState extends State<PetHome> {
     if (mounted) setState(() => _typing = true);
     PetLog.i('app: greet start');
     String accumulated = '';
+    const request =
+        '早上好/晚上好，简单打个招呼就好，两三句话。可以自然地提到你观察到的用户状态'
+        '（比如正在用什么、今天活跃了多久），但别生硬报数。';
     final reply = await _ai.chat(
-      '早上好/晚上好，简单打个招呼就好，两三句话。可以自然地提到你观察到的用户状态（比如正在用什么、今天活跃了多久），但别生硬报数。${_dataCorpus()}',
-      systemPrompt: _systemPrompt,
+      request,
+      systemPrompt: _systemPromptFor(request),
       onDelta: (d) {
         accumulated += d;
         _queueBubbleText(accumulated);
@@ -440,8 +424,8 @@ class _PetHomeState extends State<PetHome> {
     _avatar.motion('tap_body');
   }
 
-  Future<void> _proactive(String prompt) async {
-    if (_typing || !_aiActive) return;
+  Future<bool> _proactive(String prompt) async {
+    if (_typing || !_aiActive) return false;
     PetDb.instance.setAgentState('speaking', '正在组织一次主动关心');
     _say('（Amadeus 想和你说句话…）');
     _bubbleTimer?.cancel();
@@ -449,8 +433,8 @@ class _PetHomeState extends State<PetHome> {
     PetLog.i('app: proactive prompt=$prompt');
     String accumulated = '';
     final reply = await _ai.chat(
-      '$prompt${_dataCorpus()}',
-      systemPrompt: _systemPrompt,
+      prompt,
+      systemPrompt: _systemPromptFor(prompt),
       onDelta: (d) {
         accumulated += d;
         _queueBubbleText(accumulated);
@@ -462,7 +446,7 @@ class _PetHomeState extends State<PetHome> {
       final partial = reply.isNotEmpty ? reply : accumulated;
       _say(partial.isEmpty ? '回复中断了。' : '$partial\n\n（回复中断，未保存为完整对话）');
       PetDb.instance.setAgentState('observing', '主动回复中断，继续观察');
-      return;
+      return false;
     }
     final text = reply.isNotEmpty
         ? reply
@@ -471,6 +455,7 @@ class _PetHomeState extends State<PetHome> {
     _say(text);
     _avatar.motion('tap_body');
     PetDb.instance.setAgentState('observing', '主动互动完成，继续观察');
+    return true;
   }
 
   Future<void> _ask(String text) async {
@@ -481,7 +466,6 @@ class _PetHomeState extends State<PetHome> {
     _triggers.userInteracted();
     PetLog.i('app: ask start len=${text.length}');
     PetDb.instance.setAgentState('speaking', '正在回复你的消息');
-    _lastUserText = text;
     PetMemory.instance.record('user', text);
     _scheduleInputHide();
     setState(() {
@@ -500,7 +484,7 @@ class _PetHomeState extends State<PetHome> {
     String accumulated = '';
     final reply = await _ai.chat(
       text,
-      systemPrompt: _systemPrompt,
+      systemPrompt: _systemPromptFor(text),
       onDelta: (d) {
         accumulated += d;
         _queueBubbleText(accumulated);

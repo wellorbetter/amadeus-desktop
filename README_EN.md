@@ -32,6 +32,19 @@ This separation matters:
 - Activity awareness can be paused or disabled without breaking chat or local memory.
 - Future calendar, GitHub, or system integrations can be added as capabilities instead of rewriting the agent.
 
+## Capability layers
+
+| Layer | Status | Boundary |
+| --- | --- | --- |
+| Agent runtime | Implemented | Identity, conversation, context composition, and initiative |
+| Working + semantic memory | Implemented | Conversation context and audited user facts only |
+| Computer History | Implemented | Pausable, clearable, retention-bound lived observation |
+| Trigger runtime | Implemented | Policy selection, quiet hours, delivery audit, and cooldown after display |
+| Skill / MCP / Evolve | Not installed | Reserved extension points; never claimed in the prompt |
+| TimeTrace compatibility | Implemented | Reads compatible activity data without making TimeTrace a runtime dependency |
+
+Amadeus internalizes only TimeTrace's activity-awareness capability. Diary, Project/Session, Statistics UI, and AI Recap remain TimeTrace product features. In particular, AI Recap is an analysis feature, not the personality agent.
+
 ## Highlights
 
 - OpenAI, DeepSeek, and custom OpenAI-compatible endpoints
@@ -76,7 +89,8 @@ GitHub Actions validates analysis/tests and builds on native Windows and macOS r
 | `activity_history.dart` | Built-in activity capture, short-lived SQLite timeline, and deletion policy |
 | `rust/` | Cross-platform privacy classification and focus metrics exposed through a stable C ABI |
 | `tt_api.dart` | Activity aggregation and legacy TimeTrace compatibility |
-| `pet_memory.dart` | Memory selection, retrieval, and profile synthesis |
+| `agent_context.dart` | Explicit identity, working memory, semantic memory, and lived-context composition |
+| `pet_memory.dart` | Working-context selection and audited semantic-memory retrieval |
 | `trigger_engine.dart` | Initiative and interruption control |
 | `lib/ui/` | Onboarding, settings, chat bubble, and input |
 | `assets/web/` | Cross-platform Live2D web renderer |

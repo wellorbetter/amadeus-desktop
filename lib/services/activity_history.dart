@@ -132,7 +132,7 @@ class ActivityHistory {
       _provider = provider;
 
   static final ActivityHistory instance = ActivityHistory();
-  static const schemaVersion = 1;
+  static const schemaVersion = 2;
   static const MethodChannel _channel = MethodChannel('amadeus/activity');
   static const Duration pollInterval = Duration(seconds: 10);
 
@@ -144,10 +144,18 @@ class ActivityHistory {
   int? _currentId;
   String? _currentKey;
   DateTime? _currentStartedAt;
+  String? _currentAppId;
+  String? _currentAppName;
+  bool _currentIdle = false;
+  int _currentIdleSeconds = 0;
+  bool _currentlyIdle = false;
+  int? _observedTimelineRevision;
   DateTime? _lastPurgeAt;
 
   String get path => _pathOverride ?? AppPaths.activityFile.path;
   bool get initialized => _db != null;
+  int get currentIdleSeconds => _currentIdleSeconds;
+  bool get currentlyIdle => _currentlyIdle;
 
   Database get _database {
     final value = _db;
@@ -232,6 +240,14 @@ class ActivityHistory {
       ..execute(
         'CREATE INDEX IF NOT EXISTS idx_activity_events_date '
         'ON activity_events(date, captured_at)',
+      )
+      ..execute(
+        'CREATE TABLE IF NOT EXISTS activity_meta('
+        'k TEXT PRIMARY KEY,'
+        'v INTEGER NOT NULL DEFAULT 0)',
+      )
+      ..execute(
+        "INSERT OR IGNORE INTO activity_meta(k, v) VALUES('timeline_revision', 0)",
       );
   }
 
@@ -266,6 +282,8 @@ class ActivityHistory {
     final cfg = PetConfig.instance;
     if (!cfg.activityAwarenessEnabled || cfg.activityAwarenessPaused) {
       _finishCurrent(DateTime.now());
+      _currentIdleSeconds = 0;
+      _currentlyIdle = false;
       return;
     }
     if (_capturing) return;
@@ -307,7 +325,10 @@ class ActivityHistory {
 
   void recordSnapshot(ActivitySnapshot snapshot) {
     init();
+    _syncTimelineRevision();
     final cfg = PetConfig.instance;
+    _currentIdleSeconds = snapshot.idleSeconds.clamp(0, 1 << 31).toInt();
+    _currentlyIdle = _currentIdleSeconds >= cfg.activityIdleSeconds;
     final normalized = snapshot.appName.toLowerCase();
     final excluded = cfg.activityExcludedApps.any((entry) {
       final candidate = entry.trim().toLowerCase();
@@ -336,11 +357,15 @@ class ActivityHistory {
     final appName = idle ? '空闲' : snapshot.appName;
     final key = idle ? '__idle__' : '${snapshot.appId}|$normalized';
     _appendEvent(snapshot, appName, idle);
+    _rollCurrentAcrossMidnight(snapshot.capturedAt);
     if (_currentKey != key) {
       _finishCurrent(snapshot.capturedAt);
       _startSession(snapshot, appName, idle, key);
     } else {
-      _updateCurrent(snapshot.capturedAt);
+      final updated = _updateCurrent(snapshot.capturedAt);
+      // A settings child process may have cleared this row. Recover on the
+      // same sample instead of losing the session until the foreground changes.
+      if (!updated) _startSession(snapshot, appName, idle, key);
     }
   }
 
@@ -383,25 +408,100 @@ class ActivityHistory {
     _currentId = _database.lastInsertRowId;
     _currentKey = key;
     _currentStartedAt = started;
+    _currentAppId = snapshot.appId;
+    _currentAppName = appName;
+    _currentIdle = idle;
   }
 
-  void _updateCurrent(DateTime ended) {
+  bool _updateCurrent(DateTime ended) {
     final id = _currentId;
-    final started = _currentStartedAt;
-    if (id == null || started == null) return;
+    if (id == null) return false;
+    final rows = _database.select(
+      'SELECT started_at FROM usage_sessions WHERE id = ? LIMIT 1',
+      [id],
+    );
+    if (rows.isEmpty) {
+      _resetCurrent();
+      return false;
+    }
+    final started = DateTime.tryParse('${rows.first['started_at']}');
+    if (started == null) {
+      _resetCurrent();
+      return false;
+    }
+    _currentStartedAt = started;
     final duration = ended.difference(started).inSeconds.clamp(0, 86400);
     _database.execute(
       'UPDATE usage_sessions SET ended_at = ?, duration_secs = ? '
       'WHERE id = ?',
       [ended.toIso8601String(), duration, id],
     );
+    return true;
+  }
+
+  void _rollCurrentAcrossMidnight(DateTime ended) {
+    while (_currentId != null && _currentStartedAt != null) {
+      final started = _currentStartedAt!;
+      if (ended.isBefore(started)) return;
+      if (_dateKey(started) == _dateKey(ended)) return;
+      final boundary = DateTime(started.year, started.month, started.day + 1);
+      if (!_updateCurrent(boundary)) return;
+      final appId = _currentAppId ?? '';
+      final appName = _currentAppName ?? (_currentIdle ? '空闲' : '未知应用');
+      final key = _currentKey ?? (_currentIdle ? '__idle__' : '$appId|$appName');
+      final idle = _currentIdle;
+      _resetCurrent();
+      _startSession(
+        ActivitySnapshot(
+          appName: appName,
+          appId: appId,
+          idleSeconds: idle ? _currentIdleSeconds : 0,
+          capturedAt: boundary,
+        ),
+        appName,
+        idle,
+        key,
+      );
+    }
   }
 
   void _finishCurrent(DateTime ended) {
-    if (_db != null) _updateCurrent(ended);
+    if (_db != null) {
+      _rollCurrentAcrossMidnight(ended);
+      _updateCurrent(ended);
+    }
+    _resetCurrent();
+  }
+
+  void _resetCurrent() {
     _currentId = null;
     _currentKey = null;
     _currentStartedAt = null;
+    _currentAppId = null;
+    _currentAppName = null;
+    _currentIdle = false;
+  }
+
+  void _syncTimelineRevision() {
+    final rows = _database.select(
+      "SELECT v FROM activity_meta WHERE k = 'timeline_revision' LIMIT 1",
+    );
+    final revision = rows.isEmpty ? 0 : (rows.first['v'] as num).toInt();
+    final previous = _observedTimelineRevision;
+    _observedTimelineRevision = revision;
+    if (previous != null && previous != revision) _resetCurrent();
+  }
+
+  void _bumpTimelineRevision() {
+    _database.execute(
+      "UPDATE activity_meta SET v = v + 1 WHERE k = 'timeline_revision'",
+    );
+    final rows = _database.select(
+      "SELECT v FROM activity_meta WHERE k = 'timeline_revision' LIMIT 1",
+    );
+    _observedTimelineRevision = rows.isEmpty
+        ? 0
+        : (rows.first['v'] as num).toInt();
   }
 
   List<ActivityEpisode> recentEpisodes({int limit = 12}) {
@@ -493,30 +593,78 @@ class ActivityHistory {
   void clearSince(DateTime? since) {
     init();
     _finishCurrent(DateTime.now());
-    if (since == null) {
-      _database
-        ..execute('DELETE FROM activity_events')
-        ..execute('DELETE FROM usage_sessions');
-    } else {
-      _database
-        ..execute('DELETE FROM activity_events WHERE captured_at >= ?', [
-          since.toIso8601String(),
-        ])
-        ..execute('DELETE FROM usage_sessions WHERE ended_at >= ?', [
-          since.toIso8601String(),
-        ]);
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      if (since == null) {
+        _database
+          ..execute('DELETE FROM activity_events')
+          ..execute('DELETE FROM usage_sessions');
+      } else {
+        final cutoff = since.toIso8601String();
+        final overlaps = _database.select(
+          'SELECT id, started_at FROM usage_sessions '
+          'WHERE started_at < ? AND ended_at >= ?',
+          [cutoff, cutoff],
+        );
+        for (final row in overlaps) {
+          final started = DateTime.tryParse('${row['started_at']}');
+          if (started == null) continue;
+          final duration = since.difference(started).inSeconds.clamp(0, 86400);
+          _database.execute(
+            'UPDATE usage_sessions SET ended_at = ?, duration_secs = ? '
+            'WHERE id = ?',
+            [cutoff, duration, row['id']],
+          );
+        }
+        _database
+          ..execute('DELETE FROM activity_events WHERE captured_at >= ?', [
+            cutoff,
+          ])
+          ..execute('DELETE FROM usage_sessions WHERE started_at >= ?', [cutoff]);
+      }
+      _bumpTimelineRevision();
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
     }
   }
 
-  void purge({required int retentionHours}) {
+  void purge({required int retentionHours, DateTime? now}) {
     init();
-    final cutoff = DateTime.now().subtract(Duration(hours: retentionHours));
-    _database.execute('DELETE FROM usage_sessions WHERE ended_at < ?', [
-      cutoff.toIso8601String(),
-    ]);
-    _database.execute('DELETE FROM activity_events WHERE captured_at < ?', [
-      cutoff.toIso8601String(),
-    ]);
+    final cutoff = (now ?? DateTime.now()).subtract(
+      Duration(hours: retentionHours),
+    );
+    final cutoffText = cutoff.toIso8601String();
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      final overlaps = _database.select(
+        'SELECT id, ended_at FROM usage_sessions '
+        'WHERE started_at < ? AND ended_at > ?',
+        [cutoffText, cutoffText],
+      );
+      for (final row in overlaps) {
+        final ended = DateTime.tryParse('${row['ended_at']}');
+        if (ended == null) continue;
+        final duration = ended.difference(cutoff).inSeconds.clamp(0, 86400);
+        _database.execute(
+          'UPDATE usage_sessions SET started_at = ?, duration_secs = ?, date = ? '
+          'WHERE id = ?',
+          [cutoffText, duration, _dateKey(cutoff), row['id']],
+        );
+      }
+      _database
+        ..execute('DELETE FROM usage_sessions WHERE ended_at <= ?', [
+          cutoffText,
+        ])
+        ..execute('DELETE FROM activity_events WHERE captured_at < ?', [
+          cutoffText,
+        ]);
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
   }
 
   void close() {

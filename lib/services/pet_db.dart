@@ -3,9 +3,8 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
-import 'pet_logger.dart';
-import 'tt_api.dart';
 import 'app_paths.dart';
+import 'pet_logger.dart';
 
 class _NewerDatabaseSchema implements Exception {
   const _NewerDatabaseSchema(this.message);
@@ -16,45 +15,13 @@ class _NewerDatabaseSchema implements Exception {
   String toString() => message;
 }
 
-/// 单日事实（结构化，供画像/召回使用）。
-class DailyFact {
-  DailyFact({
-    required this.date,
-    required this.activeMin,
-    required this.idleMin,
-    required this.topApps,
-    required this.peakHours,
-    required this.diaryHas,
-  });
-
-  final String date;
-  final int activeMin;
-  final int idleMin;
-  final List<AppUsage> topApps;
-  final List<int> peakHours;
-  final bool diaryHas;
-
-  String get readableDate {
-    final parts = date.split('-');
-    if (parts.length != 3) return date;
-    return '${int.parse(parts[1])}月${int.parse(parts[2])}日';
-  }
-
-  String get activeText {
-    final h = activeMin ~/ 60;
-    final m = activeMin % 60;
-    if (h == 0) return '$m 分钟';
-    if (m == 0) return '$h 小时';
-    return '$h 小时 $m 分';
-  }
-}
-
 /// 本地 SQLite 记忆库（%APPDATA%/timepet/mem.db）。
 /// 分层记忆：
 /// - messages    工作记忆：最近对话（替换旧 mem.json entries）
-/// - daily_facts 事实记忆：活动感知每日聚合（结构化，供画像/召回）
 /// - memories    语义记忆：经审核的长期记忆（偏好/习惯/目标/事件）
 /// - key_value   元信息（迁移标记等）
+///
+/// Computer History 始终留在短期 activity.db，不复制到长期记忆库。
 class PetDb {
   PetDb({String? pathOverride, bool migrateLegacy = true})
     : _pathOverride = pathOverride,
@@ -62,7 +29,7 @@ class PetDb {
 
   static final PetDb instance = PetDb();
 
-  static const schemaVersion = 2;
+  static const schemaVersion = 3;
 
   final String? _pathOverride;
   final bool _migrateLegacy;
@@ -127,6 +94,10 @@ class PetDb {
     db.execute('BEGIN IMMEDIATE');
     try {
       _createSchema();
+      // v1/v2 copied activity-derived daily facts into the long-lived memory
+      // database. Remove that projection on upgrade so observation retention
+      // and the user's clear controls remain truthful.
+      if (current < 3) db.execute('DROP TABLE IF EXISTS daily_facts');
       db.userVersion = schemaVersion;
       db.execute('COMMIT');
     } catch (_) {
@@ -164,15 +135,6 @@ class PetDb {
       'ts TEXT NOT NULL)',
     );
     db.execute('CREATE INDEX IF NOT EXISTS idx_messages_id ON messages(id)');
-    db.execute(
-      'CREATE TABLE IF NOT EXISTS daily_facts('
-      'date TEXT PRIMARY KEY,'
-      'active_min INTEGER NOT NULL DEFAULT 0,'
-      'idle_min INTEGER NOT NULL DEFAULT 0,'
-      "top_apps TEXT NOT NULL DEFAULT '[]',"
-      "peak_hours TEXT NOT NULL DEFAULT '[]',"
-      'diary_has INTEGER NOT NULL DEFAULT 0)',
-    );
     db.execute(
       'CREATE TABLE IF NOT EXISTS memories('
       'id INTEGER PRIMARY KEY AUTOINCREMENT,'
@@ -225,7 +187,8 @@ class PetDb {
           if (content.isEmpty) continue;
           addMessage(role, content, ts: e['ts']?.toString());
         }
-        // 旧 facts 文本会在启动时由 TtApi 重新结构化吸收
+        // Legacy free-form facts are intentionally not imported. Computer
+        // History is rebuilt from its short-lived observation store instead.
         try {
           f.renameSync('${f.path}.bak');
         } catch (_) {}
@@ -275,80 +238,6 @@ class PetDb {
       'DELETE FROM messages WHERE id NOT IN '
       '(SELECT id FROM messages ORDER BY id DESC LIMIT ?)',
       [keep],
-    );
-  }
-
-  // ---- 事实记忆：daily_facts ----
-
-  void upsertDailyFact(DayInfo d) {
-    if (_db == null) return;
-    try {
-      db.execute(
-        'INSERT INTO daily_facts(date, active_min, idle_min, top_apps, peak_hours, diary_has) '
-        'VALUES (?, ?, ?, ?, ?, ?) '
-        'ON CONFLICT(date) DO UPDATE SET '
-        'active_min=excluded.active_min, idle_min=excluded.idle_min, '
-        'top_apps=excluded.top_apps, peak_hours=excluded.peak_hours, '
-        'diary_has=excluded.diary_has',
-        [
-          d.date,
-          d.activeMin,
-          d.idleMin,
-          jsonEncode(
-            d.topApps
-                .map((a) => {'name': a.name, 'minutes': a.minutes})
-                .toList(),
-          ),
-          jsonEncode(d.peakHours.map((h) => h.hour).toList()),
-          d.diaryHas ? 1 : 0,
-        ],
-      );
-    } catch (e) {
-      PetLog.e('db: upsertDailyFact error: $e');
-    }
-  }
-
-  List<DailyFact> dailyFactsRecent(int limit) {
-    if (_db == null) return const [];
-    try {
-      final rows = db.select(
-        'SELECT * FROM daily_facts ORDER BY date DESC LIMIT ?',
-        [limit],
-      );
-      return rows.map(_dailyFactFromRow).toList().reversed.toList();
-    } catch (e) {
-      PetLog.e('db: dailyFactsRecent error: $e');
-      return const [];
-    }
-  }
-
-  DailyFact _dailyFactFromRow(Row row) {
-    List<AppUsage> apps = const [];
-    List<int> peak = const [];
-    try {
-      apps = (jsonDecode(row['top_apps'] as String? ?? '[]') as List)
-          .whereType<Map<String, dynamic>>()
-          .map(
-            (e) => AppUsage(
-              name: e['name']?.toString() ?? '?',
-              minutes: (e['minutes'] as num?)?.toInt() ?? 0,
-            ),
-          )
-          .toList();
-    } catch (_) {}
-    try {
-      peak = (jsonDecode(row['peak_hours'] as String? ?? '[]') as List)
-          .whereType<num>()
-          .map((h) => h.toInt())
-          .toList();
-    } catch (_) {}
-    return DailyFact(
-      date: row['date'] as String? ?? '',
-      activeMin: row['active_min'] as int? ?? 0,
-      idleMin: row['idle_min'] as int? ?? 0,
-      topApps: apps,
-      peakHours: peak,
-      diaryHas: (row['diary_has'] as int? ?? 0) == 1,
     );
   }
 

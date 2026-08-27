@@ -102,8 +102,13 @@ class TriggerEngine {
   final Random _random;
   final TriggerPolicy _policy = const TriggerPolicy();
 
-  /// 触发主动聊天时回调（参数为给 AI 的提示词）。
-  void Function(String prompt)? onProactive;
+  /// Cheap preflight used before candidate selection. This prevents a busy or
+  /// unconfigured chat surface from consuming cooldowns.
+  bool Function()? canProactivelySpeak;
+
+  /// Delivers one selected prompt. Returns true only after the result was
+  /// actually displayed to the user.
+  Future<bool> Function(String prompt)? onProactive;
 
   /// 休眠状态变化回调（true=进入休眠，false=唤醒）。
   void Function(bool sleeping)? onSleepChanged;
@@ -113,7 +118,7 @@ class TriggerEngine {
   bool _warmup = true; // 启动后的第一次 tick 只做状态/休眠检测，不触发对话（避免和启动问候撞车）
 
   bool _sleeping = false;
-  int _idleStreakTicks = 0; // 连续空闲 tick 数（tick≈1 分钟）
+  int _currentIdleMinutes = 0;
   int _heartbeatTicks = 0; // 心跳日志计数（每 30 tick 报一次）
   bool _busy = false; // 忙时自适应：当前是否处于「忙」
 
@@ -122,10 +127,10 @@ class TriggerEngine {
   int _activeHour = -1;
   int _hourCount = 0;
   DateTime? _lastProactiveAt;
+  DateTime? _lastDeliveryFailureAt;
   DateTime? _lastUserInteractionAt;
   DateTime? _startedAt;
   // 空闲→恢复 / 应用专注 检测状态
-  int _lastIdleMin = -1;
   bool _wasIdling = false;
   String _lastForeground = '-';
   int _foregroundTicks = 0;
@@ -173,7 +178,7 @@ class TriggerEngine {
   void _exitSleep() {
     if (!_sleeping) return;
     _sleeping = false;
-    _idleStreakTicks = 0;
+    _currentIdleMinutes = 0;
     PetLog.i('trigger: sleep exit (user active again)');
     onSleepChanged?.call(false);
     PetDb.instance.setAgentState('observing', '用户已恢复活动');
@@ -185,7 +190,10 @@ class TriggerEngine {
     try {
       final changed = cfg.reloadIfChanged();
       if (changed) PetLog.i('trigger: config hot-reloaded');
-      if (!cfg.proactiveEnabled) return;
+      if (!cfg.proactiveEnabled) {
+        PetDb.instance.setAgentState('paused', '主动互动已关闭');
+        return;
+      }
 
       await tt.refresh();
       final hasData = tt.hasData;
@@ -197,25 +205,17 @@ class TriggerEngine {
       var idleReturned = false;
       var focusLong = false;
       if (hasData) {
-        // 空闲→恢复检测：空闲分钟数停止增长即认为用户刚回来（需两拍对比）
-        final idleNow = tt.idleMinutes;
-        idleGrowing = _lastIdleMin >= 0 && idleNow > _lastIdleMin;
-        idleReturned = _wasIdling && !idleGrowing && _lastIdleMin >= 0;
-        _wasIdling = idleGrowing || (_lastIdleMin < 0 && idleNow > 0);
-
-        // 连续空闲分钟数（近似：tick=60s，空闲分钟持续增长即视为持续空闲）
-        if (idleGrowing) {
-          final jump = idleNow - _lastIdleMin;
-          // 一次 tick 空闲暴涨（睡眠/锁屏恢复）：按整段连续空闲计，立刻进入休眠省 token
-          _idleStreakTicks += jump >= 5 ? jump : 1;
-        } else {
-          _idleStreakTicks = 0;
-        }
-        _lastIdleMin = idleNow;
+        // Native idle duration is the source of truth. Daily accumulated idle
+        // remains useful for statistics, but cannot describe the current state.
+        final idleNow = tt.currentIdleSeconds ~/ 60;
+        idleGrowing = tt.currentlyIdle;
+        idleReturned = _wasIdling && !tt.currentlyIdle;
+        _wasIdling = tt.currentlyIdle;
+        _currentIdleMinutes = tt.currentlyIdle ? idleNow : 0;
 
         // 休眠省电：连续空闲达到阈值后停止一切主动对话（LLM 零调用）
         if (cfg.sleepEnabled) {
-          if (!_sleeping && _idleStreakTicks >= cfg.sleepIdleMinutes) {
+          if (!_sleeping && _currentIdleMinutes >= cfg.sleepIdleMinutes) {
             _enterSleep(idleNow);
           } else if (_sleeping && !idleGrowing) {
             _exitSleep();
@@ -224,7 +224,10 @@ class TriggerEngine {
 
         // 专注检测：同一前台应用连续累计 tick 数
         final fg = tt.foregroundApp;
-        if (fg.isNotEmpty && fg != '-' && fg == _lastForeground) {
+        if (!tt.currentlyIdle &&
+            fg.isNotEmpty &&
+            fg != '-' &&
+            fg == _lastForeground) {
           _foregroundTicks++;
         } else {
           _foregroundTicks = 0;
@@ -234,9 +237,8 @@ class TriggerEngine {
       } else {
         // 无活动数据：清空数据依赖的状态，避免旧值误触发
         if (_sleeping) _exitSleep();
-        _idleStreakTicks = 0;
+        _currentIdleMinutes = 0;
         _wasIdling = false;
-        _lastIdleMin = -1;
         _foregroundTicks = 0;
         _lastForeground = '-';
       }
@@ -245,7 +247,7 @@ class TriggerEngine {
       if (_heartbeatTicks % 30 == 0) {
         PetLog.i(
           'trigger: heartbeat sleep=$_sleeping hasData=$hasData '
-          'idleStreak=$_idleStreakTicks busy=$_busy',
+          'idleNow=$_currentIdleMinutes busy=$_busy',
         );
       }
       if (_sleeping) return;
@@ -258,6 +260,8 @@ class TriggerEngine {
         );
         return;
       }
+
+      if (canProactivelySpeak?.call() == false) return;
 
       // 忙时自适应：未空闲且今天活跃很久 → 拉长间隔、降低上限、跳过随机搭话
       final busy =
@@ -274,6 +278,13 @@ class TriggerEngine {
       }
 
       final now = DateTime.now();
+      // Delivery failures do not consume a user-facing trigger cooldown, but a
+      // short transport backoff avoids retrying a broken provider every tick.
+      if (_lastDeliveryFailureAt != null &&
+          now.difference(_lastDeliveryFailureAt!) <
+              const Duration(minutes: 5)) {
+        return;
+      }
       if (_lastHour == -1) _lastHour = now.hour;
       final hourChanged = now.hour != _lastHour;
       _lastHour = now.hour;
@@ -319,12 +330,30 @@ class TriggerEngine {
       );
       if (decision == null) return;
 
-      _lastProactiveAt = now;
-      _hourCount++;
       PetLog.i(
-        'trigger: fire id=${decision.id} hourCount=$_hourCount '
+        'trigger: selected id=${decision.id} hourCount=$_hourCount '
         'prompt=${_clip(decision.prompt)}',
       );
+      PetDb.instance.setAgentState('thinking', '由「${decision.label}」触发主动对话');
+      final handler = onProactive;
+      final delivered = handler != null && await handler(decision.prompt);
+      if (!delivered) {
+        _lastDeliveryFailureAt = now;
+        PetDb.instance.recordProactiveEvent(
+          triggerId: decision.id,
+          label: decision.label,
+          reason: '${decision.reason}；生成或展示失败，未消耗冷却',
+          state: 'failed',
+          at: now,
+        );
+        PetDb.instance.trimProactiveEvents();
+        PetDb.instance.setAgentState('observing', '主动互动未展示，继续观察');
+        return;
+      }
+
+      _lastDeliveryFailureAt = null;
+      _lastProactiveAt = now;
+      _hourCount++;
       PetDb.instance.recordProactiveEvent(
         triggerId: decision.id,
         label: decision.label,
@@ -335,11 +364,10 @@ class TriggerEngine {
       if (decision.memoryId != null) {
         _lastNudgedMemoryId = decision.memoryId!;
       }
-      PetDb.instance.setAgentState('thinking', '由「${decision.label}」触发主动对话');
       PetMemory.instance.record('system', '触发主动聊天：${decision.prompt}');
-      onProactive?.call(decision.prompt);
     } catch (e) {
       PetLog.e('trigger: tick error: $e');
+      PetDb.instance.setAgentState('observing', '主动触发评估失败，继续观察');
     } finally {
       _running = false;
     }
@@ -355,8 +383,7 @@ class TriggerEngine {
     final candidates = <TriggerDecision>[];
     // Wellbeing lane: allowed during busy and quiet hours, but heavily cooled.
     if (cfg.triggerLateNight && (now.hour >= 23 || now.hour < 5)) {
-      final ratio =
-          PetMemory.instance.profile()['lateNightRatio'] as double? ?? 0;
+      final ratio = tt.lateNightRatio;
       candidates.add(
         TriggerDecision(
           id: 'late_night',

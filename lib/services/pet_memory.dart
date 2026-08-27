@@ -1,15 +1,14 @@
+import 'agent_context.dart';
 import 'pet_config.dart';
 import 'pet_db.dart';
 import 'pet_logger.dart';
-import 'tt_api.dart';
 
 /// 记忆层（本地 SQLite 分层记忆）：
 /// - 工作记忆：最近对话（messages 表）
-/// - 事实记忆：活动感知每日聚合（daily_facts 表）
 /// - 语义记忆：经审核的长期记忆（memories 表，偏好/习惯/目标/事件）
-/// - 用户画像：由 daily_facts 计算的规律摘要
 /// 记忆审核：用户消息含稳定信息信号时，由 LLM 提取并写入语义记忆。
-class PetMemory {
+/// Computer History 属于短期观察层，不通过本类持久化。
+class PetMemory implements AgentMemorySource {
   PetMemory({PetDb? database, PetConfig? config})
     : _database = database ?? PetDb.instance,
       _config = config ?? PetConfig.instance;
@@ -21,7 +20,6 @@ class PetMemory {
 
   static const int _msgCap = 60;
   static const int _summaryLen = 6;
-  static const int _factsDays = 3; // 事实记忆只带近 3 天，控制 system prompt 体积（省 token）
 
   /// 记忆提取信号：命中才触发 LLM 审核（省成本）。
   static final RegExp _signal = RegExp(
@@ -52,34 +50,6 @@ class PetMemory {
       sb.writeln('$who：$text');
     }
     return sb.toString();
-  }
-
-  // ---- 事实记忆 ----
-
-  void absorbFactsFrom(TtApi tt) {
-    if (!tt.hasHistory) return;
-    for (final d in tt.history) {
-      _database.upsertDailyFact(d);
-    }
-  }
-
-  String factsSummary() {
-    final days = _database.dailyFactsRecent(_factsDays);
-    if (days.isEmpty) return '';
-    final sb = StringBuffer('近期状态：\n');
-    for (final d in days) {
-      final apps = d.topApps
-          .take(4)
-          .map((a) => '${a.name} ${a.minutes} 分钟')
-          .join('、');
-      sb.writeln(
-        '- ${d.readableDate}：活跃 ${d.activeText}'
-        '${d.idleMin > 0 ? '，空闲 ${d.idleMin} 分钟' : ''}'
-        '，主要使用 ${apps.isEmpty ? '无' : apps}'
-        '${d.diaryHas ? '，写了日记' : ''}',
-      );
-    }
-    return sb.toString().trim();
   }
 
   // ---- 语义记忆（审核写入 + 召回）----
@@ -135,6 +105,12 @@ class PetMemory {
     return sb.toString().trim();
   }
 
+  @override
+  String workingSummary() => summary();
+
+  @override
+  String relevantSummary(String query) => relevantMemories(query);
+
   /// 重要性最高的记忆（主动触发用）。
   Map<String, Object?>? topMemory({int excludeId = -1}) =>
       _database.topMemory(excludeId: excludeId);
@@ -143,47 +119,4 @@ class PetMemory {
 
   List<Map<String, Object?>> recentMemoryRows({int limit = 8}) =>
       _database.recentMemoryRows(limit: limit);
-
-  // ---- 用户画像 ----
-
-  Map<String, dynamic> profile() {
-    final days = _database.dailyFactsRecent(7);
-    if (days.isEmpty) return {'has': false};
-    var totalActive = 0;
-    var lateNights = 0;
-    final appMin = <String, int>{};
-    for (final d in days) {
-      totalActive += d.activeMin;
-      if (d.peakHours.any((h) => h >= 23 || h < 5)) lateNights++;
-      for (final a in d.topApps) {
-        appMin[a.name] = (appMin[a.name] ?? 0) + a.minutes;
-      }
-    }
-    final topApps = appMin.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    return {
-      'has': true,
-      'days': days.length,
-      'avgActiveMin': (totalActive / days.length).round(),
-      'lateNightRatio': lateNights / days.length,
-      'topApp': topApps.isNotEmpty ? topApps.first.key : '',
-      'topAppMin': topApps.isNotEmpty ? topApps.first.value : 0,
-    };
-  }
-
-  String profileText() {
-    final p = profile();
-    if (p['has'] != true) return '';
-    final sb = StringBuffer('用户画像（规律参考，自然融入，不要直白念出）：\n');
-    sb.writeln(
-      '- 近 ${p['days']} 天日均活跃约 ${((p['avgActiveMin'] as int) / 60).toStringAsFixed(1)} 小时',
-    );
-    if ((p['lateNightRatio'] as double) > 0.3) {
-      sb.writeln('- 深夜活跃天数偏多');
-    }
-    if ((p['topApp'] as String).isNotEmpty) {
-      sb.writeln('- 常用应用：${p['topApp']}（近 7 天 ${p['topAppMin']} 分钟）');
-    }
-    return sb.toString().trim();
-  }
 }
