@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'pet_config.dart';
 import 'pet_db.dart';
@@ -6,16 +7,84 @@ import 'pet_logger.dart';
 import 'pet_memory.dart';
 import 'tt_api.dart';
 
+enum TriggerLane { wellbeing, transition, relationship, ambient }
+
 class TriggerDecision {
   const TriggerDecision({
     required this.id,
     required this.label,
     required this.prompt,
+    required this.reason,
+    required this.score,
+    required this.cooldown,
+    required this.lane,
+    this.memoryId,
   });
 
   final String id;
   final String label;
   final String prompt;
+  final String reason;
+  final int score;
+  final Duration cooldown;
+  final TriggerLane lane;
+  final int? memoryId;
+
+  TriggerDecision withReason(String value) => TriggerDecision(
+    id: id,
+    label: label,
+    prompt: prompt,
+    reason: value,
+    score: score,
+    cooldown: cooldown,
+    lane: lane,
+    memoryId: memoryId,
+  );
+}
+
+/// Pure trigger competition policy, separated from observation collection.
+///
+/// Every tick may produce several candidates. Cooldowns and current attention
+/// mode filter them before the highest-value candidate wins. This keeps code
+/// order from silently becoming product priority and makes the decision easy
+/// to test without native activity APIs or timers.
+class TriggerPolicy {
+  const TriggerPolicy();
+
+  TriggerDecision? select({
+    required List<TriggerDecision> candidates,
+    required DateTime now,
+    required DateTime? Function(String id) lastTriggeredAt,
+    bool busy = false,
+    bool quietHours = false,
+    bool startupGrace = false,
+  }) {
+    final eligible = candidates.where((candidate) {
+      final last = lastTriggeredAt(candidate.id);
+      if (last != null && now.difference(last) < candidate.cooldown) {
+        return false;
+      }
+      if (quietHours && candidate.lane != TriggerLane.wellbeing) return false;
+      if (startupGrace && candidate.lane != TriggerLane.wellbeing) return false;
+      if (busy &&
+          candidate.lane != TriggerLane.wellbeing &&
+          candidate.lane != TriggerLane.transition) {
+        return false;
+      }
+      return true;
+    }).toList();
+    if (eligible.isEmpty) return null;
+    eligible.sort((a, b) {
+      final score = b.score.compareTo(a.score);
+      return score != 0 ? score : a.id.compareTo(b.id);
+    });
+    final selected = eligible.first;
+    final competing = eligible.skip(1).map((item) => item.label).join('、');
+    if (competing.isEmpty) return selected;
+    return selected.withReason(
+      '${selected.reason}；同时检测到 $competing，按优先级选择本次互动',
+    );
+  }
 }
 
 /// 主动交互触发引擎：每 60 秒基于内置活动感知 + 动态配置评估一次，
@@ -25,10 +94,13 @@ class TriggerDecision {
 /// 停止一切主动对话（LLM 零调用）；用户恢复活动或主动发消息时自动唤醒。
 /// 忙时自适应：今天活跃很久且当前未空闲时，自动拉长间隔、降低每小时上限。
 class TriggerEngine {
-  TriggerEngine({required this.tt});
+  TriggerEngine({required this.tt, Random? random})
+    : _random = random ?? Random();
 
   final TtApi tt;
   final PetConfig cfg = PetConfig.instance;
+  final Random _random;
+  final TriggerPolicy _policy = const TriggerPolicy();
 
   /// 触发主动聊天时回调（参数为给 AI 的提示词）。
   void Function(String prompt)? onProactive;
@@ -50,13 +122,13 @@ class TriggerEngine {
   int _activeHour = -1;
   int _hourCount = 0;
   DateTime? _lastProactiveAt;
-  DateTime? _longSessionNotifiedAt;
+  DateTime? _lastUserInteractionAt;
+  DateTime? _startedAt;
   // 空闲→恢复 / 应用专注 检测状态
   int _lastIdleMin = -1;
   bool _wasIdling = false;
   String _lastForeground = '-';
   int _foregroundTicks = 0;
-  DateTime? _focusNotifiedAt;
   int _lastNudgedMemoryId = -1; // 最近一次「记忆关心」用到的记忆 id
   static const int _focusThresholdTicks = 90; // 连续同一前台应用 90 分钟算专注
   static const int _busyActiveMinutes = 240; // 今天活跃超过 4 小时视为「忙」
@@ -65,6 +137,8 @@ class TriggerEngine {
 
   void start() {
     if (_timer != null) return;
+    _startedAt = DateTime.now();
+    _lastProactiveAt = PetDb.instance.latestProactiveAt();
     PetLog.i('trigger: engine start (tick=60s)');
     PetDb.instance.setAgentState('observing', '正在观察活动节奏');
     _timer = Timer.periodic(const Duration(seconds: 60), (_) => _tick());
@@ -80,8 +154,12 @@ class TriggerEngine {
 
   /// 用户主动互动（发消息/点桌宠）时强制唤醒。
   void wake() {
+    _lastUserInteractionAt = DateTime.now();
     if (_sleeping) _exitSleep();
   }
+
+  /// A sent message is stronger engagement than merely opening the input.
+  void userInteracted() => wake();
 
   void _enterSleep(int idleMin) {
     _sleeping = true;
@@ -202,26 +280,42 @@ class TriggerEngine {
 
       if (now.hour != _activeHour) {
         _activeHour = now.hour;
-        _hourCount = 0;
+        _hourCount = PetDb.instance.proactiveCountSince(
+          DateTime(now.year, now.month, now.day, now.hour),
+        );
       }
 
       // 频率限制：最小间隔（忙时 ×2）+ 每小时上限（忙时减半）
       final gap = Duration(
         minutes: (cfg.minIntervalMinutes * (busy ? 2 : 1)).round(),
       );
-      if (_lastProactiveAt != null && now.difference(_lastProactiveAt!) < gap) {
+      final lastEngagement = _latestDate(
+        _lastProactiveAt,
+        _lastUserInteractionAt,
+      );
+      if (lastEngagement != null && now.difference(lastEngagement) < gap) {
         return;
       }
       final maxPerHour = busy ? (cfg.maxPerHour / 2).ceil() : cfg.maxPerHour;
       if (_hourCount >= maxPerHour) return;
 
-      final decision = _evaluate(
+      final candidates = _collectCandidates(
         now,
         hourChanged,
         idleReturned,
         focusLong,
-        busy,
         hasData,
+      );
+      final decision = _policy.select(
+        candidates: candidates,
+        now: now,
+        lastTriggeredAt: (id) =>
+            PetDb.instance.latestProactiveAt(triggerId: id),
+        busy: busy,
+        quietHours: _isQuietHour(now.hour),
+        startupGrace:
+            _startedAt != null &&
+            now.difference(_startedAt!) < const Duration(minutes: 10),
       );
       if (decision == null) return;
 
@@ -234,9 +328,13 @@ class TriggerEngine {
       PetDb.instance.recordProactiveEvent(
         triggerId: decision.id,
         label: decision.label,
-        reason: decision.prompt,
+        reason: decision.reason,
         at: now,
       );
+      PetDb.instance.trimProactiveEvents();
+      if (decision.memoryId != null) {
+        _lastNudgedMemoryId = decision.memoryId!;
+      }
       PetDb.instance.setAgentState('thinking', '由「${decision.label}」触发主动对话');
       PetMemory.instance.record('system', '触发主动聊天：${decision.prompt}');
       onProactive?.call(decision.prompt);
@@ -247,129 +345,165 @@ class TriggerEngine {
     }
   }
 
-  TriggerDecision? _evaluate(
+  List<TriggerDecision> _collectCandidates(
     DateTime now,
     bool hourChanged,
     bool idleReturned,
     bool focusLong,
-    bool busy,
     bool hasData,
   ) {
-    // 1) 整点
-    if (cfg.triggerHourly && hourChanged && now.minute <= 2) {
-      return TriggerDecision(
-        id: 'hourly',
-        label: '整点问候',
-        prompt: '现在是 ${now.hour} 点，自然地和用户打个招呼或关心一句（简短，可结合观测语料，别生硬报数）。',
-      );
-    }
-
-    // 2) 深夜（画像感知：常熬夜的用户更坚定地催休息）
+    final candidates = <TriggerDecision>[];
+    // Wellbeing lane: allowed during busy and quiet hours, but heavily cooled.
     if (cfg.triggerLateNight && (now.hour >= 23 || now.hour < 5)) {
-      final p = PetMemory.instance.profile();
-      if ((p['lateNightRatio'] as double? ?? 0) > 0.4) {
-        return const TriggerDecision(
+      final ratio =
+          PetMemory.instance.profile()['lateNightRatio'] as double? ?? 0;
+      candidates.add(
+        TriggerDecision(
           id: 'late_night',
           label: '深夜关心',
-          prompt: '时间不早了（用户最近常熬夜），温柔但更坚定地催用户早点休息（简短自然，可结合观测语料，别生硬报数）。',
-        );
-      }
-      return const TriggerDecision(
-        id: 'late_night',
-        label: '深夜关心',
-        prompt: '时间不早了，温柔地提醒用户注意休息（简短自然，别数叨）。',
+          prompt: ratio > 0.4
+              ? '时间不早了（用户最近常熬夜），温柔但更坚定地催用户早点休息（简短自然，可结合聚合状态，别生硬报数）。'
+              : '时间不早了，温柔地提醒用户注意休息（简短自然，别数叨）。',
+          reason: ratio > 0.4 ? '当前处于深夜，且近期深夜活跃比例偏高' : '当前处于深夜时段',
+          score: 94,
+          cooldown: const Duration(hours: 3),
+          lane: TriggerLane.wellbeing,
+        ),
       );
     }
-
-    // 2.5) 空闲后回来（依赖数据）
-    if (hasData && cfg.triggerIdleReturn && idleReturned) {
-      return const TriggerDecision(
-        id: 'idle_return',
-        label: '回来问候',
-        prompt: '用户刚离开又回来了，自然地打个招呼或关心一句（简短，可结合观测语料，别生硬报数）。',
-      );
-    }
-
-    // 3) 长时间连续使用（依赖数据）
     if (hasData &&
         cfg.triggerLongSession &&
         tt.activeMinutes >= cfg.longSessionMinutes) {
-      if (_longSessionNotifiedAt == null ||
-          now.difference(_longSessionNotifiedAt!) > const Duration(hours: 2)) {
-        _longSessionNotifiedAt = now;
-        return const TriggerDecision(
+      candidates.add(
+        TriggerDecision(
           id: 'long_session',
-          label: '久坐提醒',
-          prompt: '用户好像连续用了很久，自然地关心一句要不要起来活动一下（可结合观测语料，别生硬报数）。',
-        );
-      }
+          label: '活跃过久',
+          prompt: '用户今天已经使用电脑较久，自然地关心一句要不要起来活动一下（可结合聚合状态，别声称连续使用，别生硬报数）。',
+          reason:
+              '今日累计活跃达到 ${tt.activeMinutes} 分钟，超过 ${cfg.longSessionMinutes} 分钟阈值',
+          score: 88,
+          cooldown: const Duration(hours: 2),
+          lane: TriggerLane.wellbeing,
+        ),
+      );
     }
-
-    // 4) 窗口切换激增（一分钟内切换 >= 8 次，依赖数据）
-    if (hasData && cfg.triggerAppSwitchSpike && _lastSwitches != -1) {
-      final delta = tt.switches - _lastSwitches;
-      _lastSwitches = tt.switches;
-      if (delta >= 8) {
-        return const TriggerDecision(
-          id: 'app_switch_spike',
-          label: '切换过于频繁',
-          prompt: '用户刚才疯狂切换窗口，轻轻吐槽或关心一句（自然一点，可结合观测语料）。',
-        );
-      }
-    } else if (hasData) {
-      _lastSwitches = tt.switches;
-    }
-
-    // 4.5) 长时间专注同一应用（依赖数据）
     if (hasData && cfg.triggerFocusReminder && focusLong) {
-      if (_focusNotifiedAt == null ||
-          now.difference(_focusNotifiedAt!) > const Duration(hours: 2)) {
-        _focusNotifiedAt = now;
-        return const TriggerDecision(
+      candidates.add(
+        const TriggerDecision(
           id: 'focus_reminder',
           label: '专注提醒',
-          prompt: '用户盯着同一个应用很久了，自然地提醒一句起来活动一下（简短，可结合观测语料，别生硬报数）。',
-        );
-      }
+          prompt: '用户在同一个应用保持专注很久了，自然地提醒一句起来活动一下（简短，可结合聚合状态，别生硬报数）。',
+          reason: '同一个前台应用持续约 90 分钟',
+          score: 84,
+          cooldown: Duration(hours: 2),
+          lane: TriggerLane.wellbeing,
+        ),
+      );
     }
 
-    // 4.8) 记忆驱动的关心：聊过的重要事（目标/偏好/事件），过一会儿自然提起
+    // Transition lane: short-lived moments where an interruption feels natural.
+    if (hasData && cfg.triggerIdleReturn && idleReturned) {
+      candidates.add(
+        const TriggerDecision(
+          id: 'idle_return',
+          label: '回来问候',
+          prompt: '用户刚离开又回来了，自然地打个招呼或关心一句（简短，可结合聚合状态，别生硬报数）。',
+          reason: '检测到一段空闲结束，用户刚恢复活动',
+          score: 92,
+          cooldown: Duration(minutes: 30),
+          lane: TriggerLane.transition,
+        ),
+      );
+    }
+    var switchDelta = 0;
+    if (hasData) {
+      if (_lastSwitches >= 0) switchDelta = max(0, tt.switches - _lastSwitches);
+      _lastSwitches = tt.switches;
+    }
+    if (hasData && cfg.triggerAppSwitchSpike && switchDelta >= 8) {
+      candidates.add(
+        TriggerDecision(
+          id: 'app_switch_spike',
+          label: '切换过于频繁',
+          prompt: '用户刚才频繁切换应用，轻轻关心一句是不是有点乱或需要理清任务（自然一点，别挖苦）。',
+          reason: '最近一分钟检测到 $switchDelta 次应用切换',
+          score: 76,
+          cooldown: const Duration(minutes: 45),
+          lane: TriggerLane.transition,
+        ),
+      );
+    }
+
+    // Relationship lane: useful, but never competes with wellbeing while busy.
     if (cfg.triggerMemoryNudge) {
       final mem = PetMemory.instance.topMemory(excludeId: _lastNudgedMemoryId);
-      if (mem != null && (mem['importance'] as int? ?? 0) >= 3) {
-        _lastNudgedMemoryId = mem['id'] as int? ?? -1;
-        return TriggerDecision(
-          id: 'memory_nudge',
-          label: '记忆关心',
-          prompt: '用户之前提到过：${mem['content']}。自然地关心一下进展（简短，别生硬转场，可结合观测语料）。',
+      final importance = mem?['importance'] as int? ?? 0;
+      if (mem != null && importance >= 3) {
+        candidates.add(
+          TriggerDecision(
+            id: 'memory_nudge',
+            label: '记忆关心',
+            prompt:
+                '用户之前提到过：${mem['content']}。自然地关心一下进展（简短，别生硬转场；不要暗示活动原始事件被写进了记忆）。',
+            reason: '召回一条重要度 $importance 的用户可控长期记忆',
+            score: 60 + importance * 3,
+            cooldown: const Duration(hours: 4),
+            lane: TriggerLane.relationship,
+            memoryId: mem['id'] as int?,
+          ),
         );
       }
     }
 
-    // 5) 随机搭话（忙时不打扰）
-    if (cfg.triggerRandomNudge && !busy) {
-      if (_lastProactiveAt == null) {
-        return const TriggerDecision(
-          id: 'random_nudge',
-          label: '轻松搭话',
-          prompt: '主动找个话题和用户聊两句（简短自然，像朋友）。',
-        );
-      }
-      final rnd = (now.millisecondsSinceEpoch % 1000) / 1000.0;
-      if (rnd < cfg.randomNudgeChance) {
-        const topics = [
-          '随便找个轻松话题和用户聊两句。',
-          '像朋友一样问用户一个问题。',
-          '聊聊最近在读的书、音乐或生活日常。',
-        ];
-        return TriggerDecision(
-          id: 'random_nudge',
-          label: '轻松搭话',
-          prompt: topics[now.second % topics.length],
-        );
-      }
+    // Ambient lane: lowest value and automatically filtered while busy/quiet.
+    if (cfg.triggerHourly && hourChanged && now.minute <= 2) {
+      candidates.add(
+        TriggerDecision(
+          id: 'hourly',
+          label: '整点问候',
+          prompt: '现在是 ${now.hour} 点，自然地和用户打个招呼或关心一句（简短，可结合聚合状态，别生硬报数）。',
+          reason: '跨过整点，且本触发已通过独立冷却',
+          score: 42,
+          cooldown: const Duration(minutes: 55),
+          lane: TriggerLane.ambient,
+        ),
+      );
     }
-    return null;
+    if (cfg.triggerRandomNudge &&
+        _random.nextDouble() < cfg.randomNudgeChance) {
+      const topics = [
+        '随便找个轻松话题和用户聊两句。',
+        '像朋友一样问用户一个轻松的问题。',
+        '聊聊最近在读的书、音乐或生活日常。',
+      ];
+      candidates.add(
+        TriggerDecision(
+          id: 'random_nudge',
+          label: '轻松搭话',
+          prompt: topics[_random.nextInt(topics.length)],
+          reason: '低打扰随机探索通过概率门控',
+          score: 20,
+          cooldown: const Duration(minutes: 90),
+          lane: TriggerLane.ambient,
+        ),
+      );
+    }
+    return candidates;
+  }
+
+  bool _isQuietHour(int hour) {
+    if (!cfg.quietHoursEnabled || cfg.quietHoursStart == cfg.quietHoursEnd) {
+      return false;
+    }
+    return cfg.quietHoursStart < cfg.quietHoursEnd
+        ? hour >= cfg.quietHoursStart && hour < cfg.quietHoursEnd
+        : hour >= cfg.quietHoursStart || hour < cfg.quietHoursEnd;
+  }
+
+  DateTime? _latestDate(DateTime? first, DateTime? second) {
+    if (first == null) return second;
+    if (second == null) return first;
+    return first.isAfter(second) ? first : second;
   }
 
   String _clip(String s) => s.length > 60 ? '${s.substring(0, 60)}…' : s;

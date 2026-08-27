@@ -49,6 +49,9 @@ class PetConfig {
   bool triggerFocusReminder = true; // 长时间专注提醒
   bool triggerMemoryNudge = true; // 记忆驱动的关心（重要事主动提起）
   double randomNudgeChance = 0.25; // 随机搭话概率
+  bool quietHoursEnabled = true; // 安静时段只允许低频健康关心
+  int quietHoursStart = 0;
+  int quietHoursEnd = 8;
 
   // ---- 省电/休眠 ----
   bool sleepEnabled = true; // 连续空闲达到阈值后休眠，停止主动对话与记忆审核（省 token）
@@ -107,8 +110,7 @@ class PetConfig {
   File get file => _file ??= File(path);
 
   Map<String, dynamic> _defaults() => {
-    '_说明':
-        'Amadeus 桌面 Agent 动态配置。activityAwareness 为内置活动感知；proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠；appearance 为形象与气泡；ai 为对话模型；log 为日志；window 为窗口行为。设置修改后即时生效。',
+    '_说明': 'Amadeus 桌面 Agent 动态配置。activityAwareness 为内置活动感知；proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠；appearance 为形象与气泡；ai 为对话模型；log 为日志；window 为窗口行为。设置修改后即时生效。',
     'appearance': {
       'modelScale': 1.0,
       'displayWidth': 440,
@@ -131,6 +133,7 @@ class PetConfig {
       'maxPerHour': 2,
       'longSessionMinutes': 120,
       'randomNudgeChance': 0.25,
+      'quietHours': {'enabled': true, 'start': 0, 'end': 8},
       'triggers': {
         'hourly': true,
         'lateNight': true,
@@ -275,6 +278,11 @@ class PetConfig {
       'maxPerHour': maxPerHour,
       'longSessionMinutes': longSessionMinutes,
       'randomNudgeChance': randomNudgeChance,
+      'quietHours': {
+        'enabled': quietHoursEnabled,
+        'start': quietHoursStart,
+        'end': quietHoursEnd,
+      },
       'triggers': {
         'hourly': triggerHourly,
         'lateNight': triggerLateNight,
@@ -367,6 +375,12 @@ class PetConfig {
         p['randomNudgeChance'],
         0.25,
       ).clamp(0.0, 1.0).toDouble();
+      final quiet = p['quietHours'];
+      if (quiet is Map<String, dynamic>) {
+        quietHoursEnabled = quiet['enabled'] as bool? ?? true;
+        quietHoursStart = _number(quiet['start'], 0).clamp(0, 23).toInt();
+        quietHoursEnd = _number(quiet['end'], 8).clamp(0, 23).toInt();
+      }
       final t = p['triggers'];
       if (t is Map<String, dynamic>) {
         triggerHourly = t['hourly'] as bool? ?? true;

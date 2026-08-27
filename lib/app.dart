@@ -478,6 +478,7 @@ class _PetHomeState extends State<PetHome> {
       PetLog.i('app: ask ignored while another reply is streaming');
       return;
     }
+    _triggers.userInteracted();
     PetLog.i('app: ask start len=${text.length}');
     PetDb.instance.setAgentState('speaking', '正在回复你的消息');
     _lastUserText = text;

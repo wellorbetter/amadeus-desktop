@@ -36,6 +36,11 @@ void main() {
     final event = database.recentProactiveEvents().single;
     expect(event['trigger_id'], 'focus_reminder');
     expect(event['state'], 'fired');
+    expect(database.latestProactiveAt(triggerId: 'focus_reminder'), at);
+    expect(
+      database.proactiveCountSince(at.subtract(const Duration(seconds: 1))),
+      1,
+    );
 
     database.setAgentState('observing', '正在观察', at: at);
     expect(database.agentState()?['state'], 'observing');

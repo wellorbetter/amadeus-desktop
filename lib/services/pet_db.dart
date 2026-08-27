@@ -109,6 +109,7 @@ class PetDb {
     _db = sqlite3.open(path);
     db.execute('PRAGMA journal_mode=WAL');
     db.execute('PRAGMA synchronous=NORMAL');
+    db.execute('PRAGMA busy_timeout=5000');
     db.execute('PRAGMA foreign_keys=ON');
     final integrity = db.select('PRAGMA quick_check').first.values.first;
     if (integrity != 'ok') throw StateError('SQLite quick_check: $integrity');
@@ -520,6 +521,41 @@ class PetDb {
         )
         .map((row) => Map<String, Object?>.from(row))
         .toList();
+  }
+
+  DateTime? latestProactiveAt({String? triggerId}) {
+    if (_db == null) return null;
+    final rows = triggerId == null
+        ? db.select(
+            "SELECT ts FROM proactive_events WHERE state = 'fired' "
+            'ORDER BY id DESC LIMIT 1',
+          )
+        : db.select(
+            "SELECT ts FROM proactive_events WHERE state = 'fired' "
+            'AND trigger_id = ? ORDER BY id DESC LIMIT 1',
+            [triggerId],
+          );
+    if (rows.isEmpty) return null;
+    return DateTime.tryParse('${rows.first['ts']}');
+  }
+
+  int proactiveCountSince(DateTime since) {
+    if (_db == null) return 0;
+    final rows = db.select(
+      "SELECT COUNT(*) AS c FROM proactive_events WHERE state = 'fired' "
+      'AND ts >= ?',
+      [since.toIso8601String()],
+    );
+    return rows.first['c'] as int? ?? 0;
+  }
+
+  void trimProactiveEvents({int keep = 300}) {
+    if (_db == null) return;
+    db.execute(
+      'DELETE FROM proactive_events WHERE id NOT IN '
+      '(SELECT id FROM proactive_events ORDER BY id DESC LIMIT ?)',
+      [keep],
+    );
   }
 
   void setAgentState(String state, String detail, {DateTime? at}) {

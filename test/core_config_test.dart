@@ -18,6 +18,9 @@ void main() {
     cfg.timeTraceEnabled = false;
     cfg.activityAwarenessPaused = true;
     cfg.activityRetentionHours = 12;
+    cfg.quietHoursEnabled = false;
+    cfg.quietHoursStart = 22;
+    cfg.quietHoursEnd = 7;
     cfg.save();
     cfg.resetToDefaults();
 
@@ -30,6 +33,9 @@ void main() {
     expect(cfg.timeTraceEnabled, isTrue);
     expect(cfg.activityAwarenessPaused, isFalse);
     expect(cfg.activityRetentionHours, 48);
+    expect(cfg.quietHoursEnabled, isTrue);
+    expect(cfg.quietHoursStart, 0);
+    expect(cfg.quietHoursEnd, 8);
 
     final reloaded = PetConfig(pathOverride: '${dir.path}/config.json')..load();
     expect(reloaded.aiBaseUrl, 'https://api.openai.com/v1');

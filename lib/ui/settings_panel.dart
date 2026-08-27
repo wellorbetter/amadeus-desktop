@@ -235,10 +235,8 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(width: 11),
             Text(
               'Amadeus',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.3,
-              ),
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700, letterSpacing: 0.3),
             ),
             if (!compact) ...[
               const SizedBox(width: 10),
@@ -385,9 +383,8 @@ class _SettingsPageState extends State<SettingsPage> {
               children: [
                 Text(
                   _section.label,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: Theme.of(context).textTheme.headlineMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -598,7 +595,9 @@ class _SettingsPageState extends State<SettingsPage> {
               cfg.maxPerHour = v.round();
               _commit();
             }, (v) => '${v.round()} 次'),
-            _sliderRow('久坐阈值', cfg.longSessionMinutes.toDouble(), 30, 300, (v) {
+            _sliderRow('活跃时长阈值', cfg.longSessionMinutes.toDouble(), 30, 300, (
+              v,
+            ) {
               cfg.longSessionMinutes = v.round();
               _commit();
             }, (v) => '${v.round()} 分钟'),
@@ -608,58 +607,113 @@ class _SettingsPageState extends State<SettingsPage> {
       const SizedBox(height: 14),
       _SettingsCard(
         title: '触发条件',
-        subtitle: '每个条件可以独立关闭。触发只决定“是否请求”，不会绕过频率上限。',
-        child: Wrap(
-          spacing: 10,
-          runSpacing: 10,
+        subtitle: '条件先生成候选，再经过独立冷却、忙碌与安静时段筛选；代码排列不再代表优先级。',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _triggerChip(
-              '整点',
-              Icons.schedule_rounded,
-              cfg.triggerHourly,
-              (v) => cfg.triggerHourly = v,
+            _triggerGroup(
+              title: '健康关心',
+              detail: '最高优先级；忙碌和安静时段仍可低频出现。',
+              children: [
+                _triggerChip(
+                  '深夜',
+                  Icons.bedtime_outlined,
+                  cfg.triggerLateNight,
+                  (v) => cfg.triggerLateNight = v,
+                ),
+                _triggerChip(
+                  '活跃过久',
+                  Icons.airline_seat_recline_normal,
+                  cfg.triggerLongSession,
+                  (v) => cfg.triggerLongSession = v,
+                ),
+                _triggerChip(
+                  '持续专注',
+                  Icons.center_focus_strong_outlined,
+                  cfg.triggerFocusReminder,
+                  (v) => cfg.triggerFocusReminder = v,
+                ),
+              ],
             ),
-            _triggerChip(
-              '深夜',
-              Icons.bedtime_outlined,
-              cfg.triggerLateNight,
-              (v) => cfg.triggerLateNight = v,
+            const Divider(height: 28),
+            _triggerGroup(
+              title: '状态转场',
+              detail: '抓住刚回来或任务变乱的短暂时机。',
+              children: [
+                _triggerChip(
+                  '空闲归来',
+                  Icons.waving_hand_outlined,
+                  cfg.triggerIdleReturn,
+                  (v) => cfg.triggerIdleReturn = v,
+                ),
+                _triggerChip(
+                  '切窗激增',
+                  Icons.swap_horiz_rounded,
+                  cfg.triggerAppSwitchSpike,
+                  (v) => cfg.triggerAppSwitchSpike = v,
+                ),
+              ],
             ),
-            _triggerChip(
-              '久坐',
-              Icons.airline_seat_recline_normal,
-              cfg.triggerLongSession,
-              (v) => cfg.triggerLongSession = v,
+            const Divider(height: 28),
+            _triggerGroup(
+              title: '关系与轻互动',
+              detail: '忙碌或安静时段自动让路，不与健康提醒争抢。',
+              children: [
+                _triggerChip(
+                  '记忆关心',
+                  Icons.favorite_border_rounded,
+                  cfg.triggerMemoryNudge,
+                  (v) => cfg.triggerMemoryNudge = v,
+                ),
+                _triggerChip(
+                  '整点问候',
+                  Icons.schedule_rounded,
+                  cfg.triggerHourly,
+                  (v) => cfg.triggerHourly = v,
+                ),
+                _triggerChip(
+                  '随机搭话',
+                  Icons.casino_outlined,
+                  cfg.triggerRandomNudge,
+                  (v) => cfg.triggerRandomNudge = v,
+                ),
+              ],
             ),
-            _triggerChip(
-              '切窗激增',
-              Icons.swap_horiz_rounded,
-              cfg.triggerAppSwitchSpike,
-              (v) => cfg.triggerAppSwitchSpike = v,
+            if (cfg.triggerRandomNudge) ...[
+              const SizedBox(height: 8),
+              _sliderRow('随机候选概率', cfg.randomNudgeChance, 0.05, 0.6, (v) {
+                cfg.randomNudgeChance = v;
+                _commit();
+              }, (v) => '${(v * 100).round()}% / 分钟'),
+            ],
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '编排规则',
+        subtitle: '同一分钟出现多个条件时，只选择一个最合适的候选。',
+        child: const Column(
+          children: [
+            _ArchitectureRow(
+              icon: Icons.filter_alt_outlined,
+              title: '先抑制',
+              body: '启动保护、用户刚互动、全局间隔、每小时上限、独立冷却',
+              badge: 'Policy',
             ),
-            _triggerChip(
-              '随机搭话',
-              Icons.casino_outlined,
-              cfg.triggerRandomNudge,
-              (v) => cfg.triggerRandomNudge = v,
+            Divider(height: 24),
+            _ArchitectureRow(
+              icon: Icons.low_priority_rounded,
+              title: '再竞争',
+              body: '健康关心 → 状态转场 → 关系互动 → 环境搭话',
+              badge: 'One winner',
             ),
-            _triggerChip(
-              '空闲归来',
-              Icons.waving_hand_outlined,
-              cfg.triggerIdleReturn,
-              (v) => cfg.triggerIdleReturn = v,
-            ),
-            _triggerChip(
-              '专注提醒',
-              Icons.center_focus_strong_outlined,
-              cfg.triggerFocusReminder,
-              (v) => cfg.triggerFocusReminder = v,
-            ),
-            _triggerChip(
-              '记忆关心',
-              Icons.favorite_border_rounded,
-              cfg.triggerMemoryNudge,
-              (v) => cfg.triggerMemoryNudge = v,
+            Divider(height: 24),
+            _ArchitectureRow(
+              icon: Icons.receipt_long_outlined,
+              title: '可解释',
+              body: '只记录胜出的原因，并说明同时被它让开的其他候选',
+              badge: 'Local audit',
             ),
           ],
         ),
@@ -686,6 +740,25 @@ class _SettingsPageState extends State<SettingsPage> {
               cfg.adaptiveFrequency = v;
               _commit();
             }),
+            _switchRow(
+              '安静时段',
+              '${cfg.quietHoursStart}:00–${cfg.quietHoursEnd}:00 只保留低频健康关心。',
+              cfg.quietHoursEnabled,
+              (v) {
+                cfg.quietHoursEnabled = v;
+                _commit();
+              },
+            ),
+            if (cfg.quietHoursEnabled) ...[
+              _sliderRow('开始时间', cfg.quietHoursStart.toDouble(), 0, 23, (v) {
+                cfg.quietHoursStart = v.round();
+                _commit();
+              }, (v) => '${v.round()}:00'),
+              _sliderRow('结束时间', cfg.quietHoursEnd.toDouble(), 0, 23, (v) {
+                cfg.quietHoursEnd = v.round();
+                _commit();
+              }, (v) => '${v.round()}:00'),
+            ],
             _sliderRow('休眠阈值', cfg.sleepIdleMinutes.toDouble(), 5, 60, (v) {
               cfg.sleepIdleMinutes = v.round();
               _commit();
@@ -1452,6 +1525,27 @@ class _SettingsPageState extends State<SettingsPage> {
       _commit();
     },
   );
+
+  Widget _triggerGroup({
+    required String title,
+    required String detail,
+    required List<Widget> children,
+  }) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      const SizedBox(height: 3),
+      Text(
+        detail,
+        style: TextStyle(
+          fontSize: 12,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+      const SizedBox(height: 10),
+      Wrap(spacing: 10, runSpacing: 10, children: children),
+    ],
+  );
 }
 
 class _NavTile extends StatelessWidget {
@@ -1545,9 +1639,8 @@ class _SettingsCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: Theme.of(context).textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
                     ),
                     if (subtitle != null) ...[
                       const SizedBox(height: 4),
@@ -1621,9 +1714,8 @@ class _OverviewCard extends StatelessWidget {
               const SizedBox(height: 3),
               Text(
                 value,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+                style: Theme.of(context).textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 6),
               Text(

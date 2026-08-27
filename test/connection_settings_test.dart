@@ -41,6 +41,25 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('trigger settings expose lanes and orchestration policy', (
+    tester,
+  ) async {
+    final dir = Directory.systemTemp.createTempSync('timepet-trigger-ui-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final config = PetConfig(pathOverride: '${dir.path}/config.json');
+    await tester.pumpWidget(MaterialApp(home: SettingsPage(config: config)));
+
+    await tester.tap(find.text('主动互动'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('健康关心'), findsOneWidget);
+    expect(find.text('状态转场'), findsOneWidget);
+    expect(find.text('关系与轻互动'), findsOneWidget);
+    expect(find.text('编排规则'), findsOneWidget);
+    expect(find.text('安静时段'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('activity workspace exposes stream state and source controls', (
     tester,
   ) async {
