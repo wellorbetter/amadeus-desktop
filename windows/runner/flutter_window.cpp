@@ -1,10 +1,68 @@
 #include "flutter_window.h"
 
+#include <algorithm>
 #include <optional>
+#include <string>
 #include <windowsx.h>
 
 #include "flutter/generated_plugin_registrant.h"
 #include "desktop_multi_window/desktop_multi_window_plugin.h"
+#include "amadeus_core.h"
+
+namespace {
+
+std::string WideToUtf8(const std::wstring& value) {
+  if (value.empty()) return {};
+  const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(),
+                                       static_cast<int>(value.size()), nullptr,
+                                       0, nullptr, nullptr);
+  std::string result(size, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, value.c_str(),
+                      static_cast<int>(value.size()), result.data(), size,
+                      nullptr, nullptr);
+  return result;
+}
+
+std::wstring ForegroundProcessName(DWORD* process_id) {
+  const HWND foreground = GetForegroundWindow();
+  if (!foreground) return {};
+  DWORD pid = 0;
+  GetWindowThreadProcessId(foreground, &pid);
+  if (process_id) *process_id = pid;
+  if (!pid) return {};
+  const HANDLE process =
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) return L"Process " + std::to_wstring(pid);
+  std::wstring path(32768, L'\0');
+  DWORD length = static_cast<DWORD>(path.size());
+  if (!QueryFullProcessImageNameW(process, 0, path.data(), &length)) {
+    CloseHandle(process);
+    return L"Process " + std::to_wstring(pid);
+  }
+  CloseHandle(process);
+  path.resize(length);
+  const auto slash = path.find_last_of(L"\\/");
+  return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
+int64_t IdleSeconds() {
+  LASTINPUTINFO info{sizeof(LASTINPUTINFO)};
+  if (!GetLastInputInfo(&info)) return 0;
+  const DWORD idle_ms = GetTickCount() - info.dwTime;
+  return static_cast<int64_t>(idle_ms / 1000);
+}
+
+int64_t IntegerValue(const flutter::EncodableValue& value,
+                     int64_t fallback) {
+  if (const auto* i = std::get_if<int32_t>(&value)) return *i;
+  if (const auto* i = std::get_if<int64_t>(&value)) return *i;
+  if (const auto* d = std::get_if<double>(&value)) {
+    return static_cast<int64_t>(*d);
+  }
+  return fallback;
+}
+
+}  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -50,6 +108,66 @@ bool FlutterWindow::OnCreate() {
           return;
         }
         result->NotImplemented();
+      });
+  activity_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "amadeus/activity",
+          &flutter::StandardMethodCodec::GetInstance());
+  activity_channel_->SetMethodCallHandler(
+      [](const auto& call, auto result) {
+        if (call.method_name() != "getSnapshot") {
+          result->NotImplemented();
+          return;
+        }
+        DWORD pid = 0;
+        const auto process_name = ForegroundProcessName(&pid);
+        const auto app_name = WideToUtf8(process_name);
+        const auto idle_seconds = IdleSeconds();
+        int64_t idle_threshold = 300;
+        std::string exclusions;
+        if (const auto* arguments =
+                std::get_if<flutter::EncodableMap>(call.arguments())) {
+          const auto threshold =
+              arguments->find(flutter::EncodableValue("idleThreshold"));
+          if (threshold != arguments->end()) {
+            idle_threshold = IntegerValue(threshold->second, 300);
+          }
+          const auto excluded =
+              arguments->find(flutter::EncodableValue("excludedApps"));
+          if (excluded != arguments->end()) {
+            if (const auto* values =
+                    std::get_if<flutter::EncodableList>(&excluded->second)) {
+              for (const auto& value : *values) {
+                if (const auto* name = std::get_if<std::string>(&value)) {
+                  if (!exclusions.empty()) exclusions += '\n';
+                  exclusions += *name;
+                }
+              }
+            }
+          }
+        }
+        const auto decision = amadeus_activity_classify(
+            app_name.c_str(), static_cast<uint64_t>(idle_seconds),
+            static_cast<uint64_t>(std::max<int64_t>(1, idle_threshold)),
+            exclusions.c_str());
+        flutter::EncodableMap snapshot;
+        snapshot[flutter::EncodableValue("appName")] =
+            flutter::EncodableValue(app_name);
+        // Deliberately expose an identifier, never the executable path.
+        const auto process_id = WideToUtf8(process_name);
+        snapshot[flutter::EncodableValue("appId")] = flutter::EncodableValue(
+            process_id.empty()
+                ? (pid == 0 ? std::string()
+                            : "win32:process-" + std::to_string(pid))
+                : "win32:" + process_id);
+        snapshot[flutter::EncodableValue("idleSeconds")] =
+            flutter::EncodableValue(idle_seconds);
+        snapshot[flutter::EncodableValue("decision")] =
+            flutter::EncodableValue(decision);
+        snapshot[flutter::EncodableValue("coreVersion")] =
+            flutter::EncodableValue(
+                static_cast<int64_t>(amadeus_core_version()));
+        result->Success(flutter::EncodableValue(snapshot));
       });
   RegisterPlugins(flutter_controller_->engine());
   // 子窗口（设置窗口）创建时同样注册所有插件

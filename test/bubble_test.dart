@@ -6,7 +6,7 @@ void main() {
   testWidgets('long streaming reply stays mounted and exposes scrolling', (
     tester,
   ) async {
-    final text = List.filled(200, '红莉栖').join();
+    final text = List.filled(200, 'Amadeus').join();
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(

@@ -63,6 +63,11 @@ include(flutter/generated_plugins.cmake)
 # The plugin's NuGet .targets are MSBuild-only; provide include dirs and a
 # real import lib so the target links under CMake/Ninja.
 if(TARGET webview_windows_plugin)
+  # webview_windows 0.4 still uses <experimental/coroutine>. Newer MSVC
+  # toolchains intentionally fail that header unless this compatibility flag
+  # is set; keep the workaround scoped to the third-party plugin target.
+  target_compile_definitions(webview_windows_plugin PRIVATE
+    _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
   target_include_directories(webview_windows_plugin PRIVATE
     "${CMAKE_BINARY_DIR}/packages/Microsoft.Web.WebView2/build/native/include"
     "${CMAKE_BINARY_DIR}/packages/Microsoft.Windows.ImplementationLibrary/include"

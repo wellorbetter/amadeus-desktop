@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-/// 动态配置：%APPDATA%/timepet/config.json
+import 'app_paths.dart';
+
+/// 动态配置：由 [AppPaths] 解析当前平台的用户数据目录。
 /// 设置面板修改即时保存并热生效，无需重启；也支持外部编辑后 60 秒自动热加载。
 class PetConfig {
   PetConfig({String? pathOverride}) : _pathOverride = pathOverride;
@@ -31,8 +33,8 @@ class PetConfig {
   int bubbleAutoHideSeconds = 8; // 气泡自动隐藏秒数
   bool darkMode = true; // 设置窗口深浅主题（true=深色）
   double settingsOpacity = 0.96; // 设置窗口整体透明度
-  String modelPath =
-      ''; // Live2D 模型 json 路径（留空自动扫描 exe 目录/models 与 %APPDATA%/timepet/models）
+  bool settingsSidebarCollapsed = false; // 设置窗口侧栏折叠状态
+  String modelPath = ''; // Live2D 模型 json 路径（留空自动扫描 exe 与用户数据目录的 models）
 
   // ---- 主动对话 ----
   bool proactiveEnabled = true;
@@ -47,6 +49,9 @@ class PetConfig {
   bool triggerFocusReminder = true; // 长时间专注提醒
   bool triggerMemoryNudge = true; // 记忆驱动的关心（重要事主动提起）
   double randomNudgeChance = 0.25; // 随机搭话概率
+  bool quietHoursEnabled = true; // 安静时段只允许低频健康关心
+  int quietHoursStart = 0;
+  int quietHoursEnd = 8;
 
   // ---- 省电/休眠 ----
   bool sleepEnabled = true; // 连续空闲达到阈值后休眠，停止主动对话与记忆审核（省 token）
@@ -57,6 +62,24 @@ class PetConfig {
   // ---- 聊天 ----
   int chatAutoHideSeconds = 20; // 无操作多少秒后自动收起输入框
 
+  // ---- Agent capabilities ----
+  bool activityAwarenessEnabled = true;
+  bool activityAwarenessPaused = false;
+  int activityRetentionHours = 48;
+  int activityIdleSeconds = 300;
+  List<String> activityExcludedApps = const [
+    '1Password',
+    'Bitwarden',
+    'KeePass',
+  ];
+
+  // Categories the user does not allow automatic memory extraction to store.
+  List<String> memoryDisabledCategories = const [];
+
+  /// Compatibility for pre-Agent configuration and callers.
+  bool get timeTraceEnabled => activityAwarenessEnabled;
+  set timeTraceEnabled(bool value) => activityAwarenessEnabled = value;
+
   // ---- AI ----
   bool aiEnabled = true;
   String aiAuthMode = 'openai_api_key';
@@ -64,8 +87,7 @@ class PetConfig {
   String aiBaseUrl = 'https://api.openai.com/v1';
   String aiModel = 'gpt-5.6-luna';
   String soulText = '';
-  String soulFile =
-      ''; // 人格插件 soul.md 路径（留空自动检测 %APPDATA%/timepet/soul.md 或 exe 目录/soul.md）
+  String soulFile = ''; // 人格 soul.md 路径（留空自动检测用户数据目录或 exe 目录）
   double aiTemperature = 0.8;
   int aiMaxTokens = 800; // AI 单次回复最大 token 数（防长回复截断）
 
@@ -82,16 +104,14 @@ class PetConfig {
   String get path {
     final override = _pathOverride;
     if (override != null) return override;
-    final appData =
-        Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
-    return '$appData/timepet/config.json';
+    return AppPaths.configFile.path;
   }
 
   File get file => _file ??= File(path);
 
   Map<String, dynamic> _defaults() => {
     '_说明':
-        'TimeTrace 桌宠动态配置。设置面板修改即时生效；外部编辑后 60 秒内自动热加载（无需重启）。proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠（空闲时停止主动对话/记忆审核，省 token）；appearance 为模型/气泡外观；ai 为对话模型；log 为日志；window 为窗口行为。',
+        'Amadeus 桌面 Agent 动态配置。activityAwareness 为内置活动感知；proactive 为主动说话；triggers 为各触发开关；chat 为聊天框行为；sleep 为省电休眠；appearance 为形象与气泡；ai 为对话模型；log 为日志；window 为窗口行为。设置修改后即时生效。',
     'appearance': {
       'modelScale': 1.0,
       'displayWidth': 440,
@@ -105,6 +125,7 @@ class PetConfig {
       'bubbleAutoHideSeconds': 8,
       'darkMode': true,
       'settingsOpacity': 0.96,
+      'settingsSidebarCollapsed': false,
       'modelPath': '',
     },
     'proactive': {
@@ -113,6 +134,7 @@ class PetConfig {
       'maxPerHour': 2,
       'longSessionMinutes': 120,
       'randomNudgeChance': 0.25,
+      'quietHours': {'enabled': true, 'start': 0, 'end': 8},
       'triggers': {
         'hourly': true,
         'lateNight': true,
@@ -125,11 +147,20 @@ class PetConfig {
       },
     },
     'chat': {'autoHideSeconds': 20},
+    'capabilities': {
+      'activityAwareness': {
+        'enabled': true,
+        'paused': false,
+        'retentionHours': 48,
+        'idleSeconds': 300,
+        'excludedApps': ['1Password', 'Bitwarden', 'KeePass'],
+      },
+    },
+    'memory': {'disabledCategories': <String>[]},
     'sleep': {'enabled': true, 'idleMinutes': 15, 'adaptiveFrequency': true},
     'ai': {
       'enabled': true,
       'authMode': 'openai_api_key',
-      'apiKey': '',
       'baseUrl': 'https://api.openai.com/v1',
       'model': 'gpt-5.6-luna',
       'temperature': 0.8,
@@ -149,6 +180,9 @@ class PetConfig {
   /// 读取配置（文件不存在则写入默认值）。
   void load() {
     try {
+      // Secure credentials live outside config.json. Preserve the hydrated
+      // runtime value across config hot reloads once plaintext migration is done.
+      final hydratedApiKey = aiApiKey;
       final f = file;
       if (!f.existsSync()) {
         f.parent.createSync(recursive: true);
@@ -159,10 +193,29 @@ class PetConfig {
       final json = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
       _apply(_defaults());
       _apply(json);
+      final ai = json['ai'];
+      if (ai is Map<String, dynamic> &&
+          !ai.containsKey('apiKey') &&
+          hydratedApiKey.isNotEmpty) {
+        aiApiKey = hydratedApiKey;
+      }
       _lastLoad = f.statSync().modified;
       revision.value++;
-    } catch (e) {
-      // 配置损坏时保持默认值
+    } catch (error) {
+      final hydratedApiKey = aiApiKey;
+      final f = file;
+      if (f.existsSync()) {
+        final stamp = DateTime.now().toUtc().toIso8601String().replaceAll(
+          ':',
+          '-',
+        );
+        try {
+          f.renameSync('${f.path}.corrupt-$stamp');
+        } catch (_) {}
+      }
+      _apply(_defaults());
+      aiApiKey = hydratedApiKey;
+      save();
     }
   }
 
@@ -217,6 +270,7 @@ class PetConfig {
       'bubbleAutoHideSeconds': bubbleAutoHideSeconds,
       'darkMode': darkMode,
       'settingsOpacity': settingsOpacity,
+      'settingsSidebarCollapsed': settingsSidebarCollapsed,
       'modelPath': modelPath,
     },
     'proactive': {
@@ -225,6 +279,11 @@ class PetConfig {
       'maxPerHour': maxPerHour,
       'longSessionMinutes': longSessionMinutes,
       'randomNudgeChance': randomNudgeChance,
+      'quietHours': {
+        'enabled': quietHoursEnabled,
+        'start': quietHoursStart,
+        'end': quietHoursEnd,
+      },
       'triggers': {
         'hourly': triggerHourly,
         'lateNight': triggerLateNight,
@@ -237,6 +296,16 @@ class PetConfig {
       },
     },
     'chat': {'autoHideSeconds': chatAutoHideSeconds},
+    'capabilities': {
+      'activityAwareness': {
+        'enabled': activityAwarenessEnabled,
+        'paused': activityAwarenessPaused,
+        'retentionHours': activityRetentionHours,
+        'idleSeconds': activityIdleSeconds,
+        'excludedApps': activityExcludedApps,
+      },
+    },
+    'memory': {'disabledCategories': memoryDisabledCategories},
     'sleep': {
       'enabled': sleepEnabled,
       'idleMinutes': sleepIdleMinutes,
@@ -245,7 +314,6 @@ class PetConfig {
     'ai': {
       'enabled': aiEnabled,
       'authMode': aiAuthMode,
-      'apiKey': aiApiKey,
       'baseUrl': aiBaseUrl,
       'model': aiModel,
       'temperature': aiTemperature,
@@ -288,6 +356,8 @@ class PetConfig {
         a['settingsOpacity'],
         0.96,
       ).clamp(0.75, 1.0).toDouble();
+      settingsSidebarCollapsed =
+          a['settingsSidebarCollapsed'] as bool? ?? false;
       modelPath = a['modelPath']?.toString() ?? '';
     }
     final p = json['proactive'];
@@ -306,6 +376,12 @@ class PetConfig {
         p['randomNudgeChance'],
         0.25,
       ).clamp(0.0, 1.0).toDouble();
+      final quiet = p['quietHours'];
+      if (quiet is Map<String, dynamic>) {
+        quietHoursEnabled = quiet['enabled'] as bool? ?? true;
+        quietHoursStart = _number(quiet['start'], 0).clamp(0, 23).toInt();
+        quietHoursEnd = _number(quiet['end'], 8).clamp(0, 23).toInt();
+      }
       final t = p['triggers'];
       if (t is Map<String, dynamic>) {
         triggerHourly = t['hourly'] as bool? ?? true;
@@ -325,11 +401,56 @@ class PetConfig {
         20,
       ).clamp(1, 600).toInt();
     }
+    final capabilities = json['capabilities'];
+    if (capabilities is Map<String, dynamic>) {
+      final awareness = capabilities['activityAwareness'];
+      final legacy = capabilities['timetrace'];
+      if (awareness is Map<String, dynamic>) {
+        activityAwarenessEnabled = awareness['enabled'] as bool? ?? true;
+        activityAwarenessPaused = awareness['paused'] as bool? ?? false;
+        activityRetentionHours = _number(
+          awareness['retentionHours'],
+          48,
+        ).clamp(1, 720).toInt();
+        activityIdleSeconds = _number(
+          awareness['idleSeconds'],
+          300,
+        ).clamp(30, 3600).toInt();
+        final excluded = awareness['excludedApps'];
+        activityExcludedApps = excluded is List
+            ? excluded
+                  .map((item) => item.toString().trim())
+                  .where((item) => item.isNotEmpty)
+                  .toList(growable: false)
+            : const ['1Password', 'Bitwarden', 'KeePass'];
+      } else if (legacy is Map<String, dynamic>) {
+        activityAwarenessEnabled = legacy['enabled'] as bool? ?? true;
+      }
+    }
     final sl = json['sleep'];
     if (sl is Map<String, dynamic>) {
       sleepEnabled = sl['enabled'] as bool? ?? true;
       sleepIdleMinutes = _number(sl['idleMinutes'], 15).clamp(1, 1440).toInt();
       adaptiveFrequency = sl['adaptiveFrequency'] as bool? ?? true;
+    }
+    final memory = json['memory'];
+    if (memory is Map<String, dynamic>) {
+      const supported = {
+        'preference',
+        'habit',
+        'goal',
+        'fact',
+        'event',
+        'relationship',
+      };
+      final disabled = memory['disabledCategories'];
+      memoryDisabledCategories = disabled is List
+          ? disabled
+                .map((item) => item.toString())
+                .where(supported.contains)
+                .toSet()
+                .toList(growable: false)
+          : const [];
     }
     final ai = json['ai'];
     if (ai is Map<String, dynamic>) {

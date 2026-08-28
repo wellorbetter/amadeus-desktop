@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'pet_config.dart';
+import 'app_paths.dart';
 
 /// 轻量文件日志：写入 exe 同级目录 timepet.log。
 /// 支持通过配置开关与级别过滤（INFO / WARN / ERROR），便于排查桌宠问题。
@@ -20,8 +21,8 @@ class PetLog {
   static void _ensure() {
     if (_file != null) return;
     try {
-      final dir = File(Platform.resolvedExecutable).parent.path;
-      _file = File('$dir/timepet.log');
+      _file = AppPaths.logFile;
+      _file!.parent.createSync(recursive: true);
     } catch (_) {
       _file = File('timepet.log');
     }

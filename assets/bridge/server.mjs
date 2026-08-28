@@ -28,6 +28,8 @@ const DB_CANDIDATES = [
   process.env.TIMETRACE_DB,
   path.join(os.homedir(), "AppData", "Roaming", "TimeTrace", "time.db"),
   path.join(os.homedir(), "AppData", "Roaming", "timetrace", "time.db"),
+  path.join(os.homedir(), "Library", "Application Support", "TimeTrace", "time.db"),
+  path.join(os.homedir(), "Library", "Application Support", "timetrace", "time.db"),
 ].filter(Boolean);
 
 // The pet is monitored like any other foreground window. Exclude only exact

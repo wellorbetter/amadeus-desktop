@@ -3,52 +3,37 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import 'app_paths.dart';
 import 'pet_logger.dart';
-import 'tt_api.dart';
 
-/// 单日事实（结构化，供画像/召回使用）。
-class DailyFact {
-  DailyFact({
-    required this.date,
-    required this.activeMin,
-    required this.idleMin,
-    required this.topApps,
-    required this.peakHours,
-    required this.diaryHas,
-  });
+class _NewerDatabaseSchema implements Exception {
+  const _NewerDatabaseSchema(this.message);
 
-  final String date;
-  final int activeMin;
-  final int idleMin;
-  final List<AppUsage> topApps;
-  final List<int> peakHours;
-  final bool diaryHas;
+  final String message;
 
-  String get readableDate {
-    final parts = date.split('-');
-    if (parts.length != 3) return date;
-    return '${int.parse(parts[1])}月${int.parse(parts[2])}日';
-  }
-
-  String get activeText {
-    final h = activeMin ~/ 60;
-    final m = activeMin % 60;
-    if (h == 0) return '$m 分钟';
-    if (m == 0) return '$h 小时';
-    return '$h 小时 $m 分';
-  }
+  @override
+  String toString() => message;
 }
 
 /// 本地 SQLite 记忆库（%APPDATA%/timepet/mem.db）。
 /// 分层记忆：
 /// - messages    工作记忆：最近对话（替换旧 mem.json entries）
-/// - daily_facts 事实记忆：TimeTrace 每日聚合（结构化，供画像/召回）
-/// - memories    语义记忆：经审核的长期记忆（偏好/习惯/目标/事件）
+/// - memory_candidates 候选记忆：模型提出、用户尚未确认的稳定信息
+/// - memories    语义记忆：用户确认后的长期记忆（偏好/习惯/目标/事件）
 /// - key_value   元信息（迁移标记等）
+///
+/// Computer History 始终留在短期 activity.db，不复制到长期记忆库。
 class PetDb {
-  PetDb._();
+  PetDb({String? pathOverride, bool migrateLegacy = true})
+    : _pathOverride = pathOverride,
+      _migrateLegacy = migrateLegacy;
 
-  static final PetDb instance = PetDb._();
+  static final PetDb instance = PetDb();
+
+  static const schemaVersion = 4;
+
+  final String? _pathOverride;
+  final bool _migrateLegacy;
 
   Database? _db;
 
@@ -61,25 +46,84 @@ class PetDb {
   }
 
   String get path {
-    final appData =
-        Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
-    return '$appData/timepet/mem.db';
+    return _pathOverride ?? AppPaths.memoryFile.path;
   }
 
   void init() {
     if (_db != null) return;
     try {
-      final f = File(path);
-      f.parent.createSync(recursive: true);
-      _db = sqlite3.open(path);
-      db.execute('PRAGMA journal_mode=WAL');
-      db.execute('PRAGMA synchronous=NORMAL');
-      db.execute('PRAGMA foreign_keys=ON');
-      _createSchema();
-      _migrateFromMemJson();
+      _openAndMigrate();
       PetLog.i('db: init ok path=$path');
     } catch (e) {
       PetLog.e('db: init error: $e');
+      _db?.close();
+      _db = null;
+      if (e is _NewerDatabaseSchema) return;
+      final backup = _backupBrokenDatabase();
+      try {
+        _openAndMigrate();
+        PetLog.i('db: recovered with a fresh database backup=$backup');
+      } catch (recoveryError) {
+        PetLog.e('db: recovery error: $recoveryError');
+        _db?.close();
+        _db = null;
+      }
+    }
+  }
+
+  void _openAndMigrate() {
+    final f = File(path);
+    f.parent.createSync(recursive: true);
+    _db = sqlite3.open(path);
+    db.execute('PRAGMA journal_mode=WAL');
+    db.execute('PRAGMA synchronous=NORMAL');
+    db.execute('PRAGMA busy_timeout=5000');
+    db.execute('PRAGMA foreign_keys=ON');
+    final integrity = db.select('PRAGMA quick_check').first.values.first;
+    if (integrity != 'ok') throw StateError('SQLite quick_check: $integrity');
+    _migrateSchema();
+    if (_migrateLegacy) _migrateFromMemJson();
+  }
+
+  void _migrateSchema() {
+    final current = db.userVersion;
+    if (current > schemaVersion) {
+      throw _NewerDatabaseSchema(
+        'Database schema $current is newer than supported $schemaVersion',
+      );
+    }
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      _createSchema();
+      // v1/v2 copied activity-derived daily facts into the long-lived memory
+      // database. Remove that projection on upgrade so observation retention
+      // and the user's clear controls remain truthful.
+      if (current < 3) db.execute('DROP TABLE IF EXISTS daily_facts');
+      db.userVersion = schemaVersion;
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  String? _backupBrokenDatabase() {
+    final source = File(path);
+    if (!source.existsSync()) return null;
+    final stamp = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+    final backupPath = '$path.corrupt-$stamp';
+    try {
+      source.renameSync(backupPath);
+      for (final suffix in const ['-wal', '-shm']) {
+        final sidecar = File('$path$suffix');
+        if (sidecar.existsSync()) {
+          sidecar.renameSync('$backupPath$suffix');
+        }
+      }
+      return backupPath;
+    } catch (error) {
+      PetLog.e('db: failed to preserve corrupt database: $error');
+      return null;
     }
   }
 
@@ -92,15 +136,6 @@ class PetDb {
       'ts TEXT NOT NULL)',
     );
     db.execute('CREATE INDEX IF NOT EXISTS idx_messages_id ON messages(id)');
-    db.execute(
-      'CREATE TABLE IF NOT EXISTS daily_facts('
-      'date TEXT PRIMARY KEY,'
-      'active_min INTEGER NOT NULL DEFAULT 0,'
-      'idle_min INTEGER NOT NULL DEFAULT 0,'
-      "top_apps TEXT NOT NULL DEFAULT '[]',"
-      "peak_hours TEXT NOT NULL DEFAULT '[]',"
-      'diary_has INTEGER NOT NULL DEFAULT 0)',
-    );
     db.execute(
       'CREATE TABLE IF NOT EXISTS memories('
       'id INTEGER PRIMARY KEY AUTOINCREMENT,'
@@ -116,9 +151,36 @@ class PetDb {
       'ON memories(active, importance)',
     );
     db.execute(
+      'CREATE TABLE IF NOT EXISTS memory_candidates('
+      'id INTEGER PRIMARY KEY AUTOINCREMENT,'
+      'content TEXT NOT NULL,'
+      "category TEXT NOT NULL DEFAULT 'fact',"
+      'importance INTEGER NOT NULL DEFAULT 1,'
+      'ts TEXT NOT NULL,'
+      "source TEXT NOT NULL DEFAULT 'model-suggested',"
+      "status TEXT NOT NULL DEFAULT 'pending')",
+    );
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_memory_candidates_status '
+      'ON memory_candidates(status, id)',
+    );
+    db.execute(
       'CREATE TABLE IF NOT EXISTS key_value('
       'k TEXT PRIMARY KEY,'
       'v TEXT)',
+    );
+    db.execute(
+      'CREATE TABLE IF NOT EXISTS proactive_events('
+      'id INTEGER PRIMARY KEY AUTOINCREMENT,'
+      'trigger_id TEXT NOT NULL,'
+      'label TEXT NOT NULL,'
+      'reason TEXT NOT NULL,'
+      'state TEXT NOT NULL,'
+      'ts TEXT NOT NULL)',
+    );
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_proactive_events_id '
+      'ON proactive_events(id)',
     );
   }
 
@@ -127,9 +189,9 @@ class PetDb {
   void _migrateFromMemJson() {
     try {
       if (getKv('memjson_migrated') == '1') return;
-      final appData =
-          Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
-      final f = File('$appData/timepet/mem.json');
+      final f = File(
+        '${AppPaths.userDataDirectory.path}${Platform.pathSeparator}mem.json',
+      );
       if (f.existsSync()) {
         final json = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
         final entries = json['entries'] as List? ?? const [];
@@ -140,7 +202,8 @@ class PetDb {
           if (content.isEmpty) continue;
           addMessage(role, content, ts: e['ts']?.toString());
         }
-        // 旧 facts 文本会在启动时由 TtApi 重新结构化吸收
+        // Legacy free-form facts are intentionally not imported. Computer
+        // History is rebuilt from its short-lived observation store instead.
         try {
           f.renameSync('${f.path}.bak');
         } catch (_) {}
@@ -170,7 +233,9 @@ class PetDb {
     if (_db == null) return const [];
     return db
         .select(
-          'SELECT role, content, ts FROM messages ORDER BY id DESC LIMIT ?',
+          "SELECT role, content, ts FROM messages "
+          "WHERE role IN ('user', 'assistant') "
+          'ORDER BY id DESC LIMIT ?',
           [limit],
         )
         .toList()
@@ -190,80 +255,6 @@ class PetDb {
       'DELETE FROM messages WHERE id NOT IN '
       '(SELECT id FROM messages ORDER BY id DESC LIMIT ?)',
       [keep],
-    );
-  }
-
-  // ---- 事实记忆：daily_facts ----
-
-  void upsertDailyFact(DayInfo d) {
-    if (_db == null) return;
-    try {
-      db.execute(
-        'INSERT INTO daily_facts(date, active_min, idle_min, top_apps, peak_hours, diary_has) '
-        'VALUES (?, ?, ?, ?, ?, ?) '
-        'ON CONFLICT(date) DO UPDATE SET '
-        'active_min=excluded.active_min, idle_min=excluded.idle_min, '
-        'top_apps=excluded.top_apps, peak_hours=excluded.peak_hours, '
-        'diary_has=excluded.diary_has',
-        [
-          d.date,
-          d.activeMin,
-          d.idleMin,
-          jsonEncode(
-            d.topApps
-                .map((a) => {'name': a.name, 'minutes': a.minutes})
-                .toList(),
-          ),
-          jsonEncode(d.peakHours.map((h) => h.hour).toList()),
-          d.diaryHas ? 1 : 0,
-        ],
-      );
-    } catch (e) {
-      PetLog.e('db: upsertDailyFact error: $e');
-    }
-  }
-
-  List<DailyFact> dailyFactsRecent(int limit) {
-    if (_db == null) return const [];
-    try {
-      final rows = db.select(
-        'SELECT * FROM daily_facts ORDER BY date DESC LIMIT ?',
-        [limit],
-      );
-      return rows.map(_dailyFactFromRow).toList().reversed.toList();
-    } catch (e) {
-      PetLog.e('db: dailyFactsRecent error: $e');
-      return const [];
-    }
-  }
-
-  DailyFact _dailyFactFromRow(Row row) {
-    List<AppUsage> apps = const [];
-    List<int> peak = const [];
-    try {
-      apps = (jsonDecode(row['top_apps'] as String? ?? '[]') as List)
-          .whereType<Map<String, dynamic>>()
-          .map(
-            (e) => AppUsage(
-              name: e['name']?.toString() ?? '?',
-              minutes: (e['minutes'] as num?)?.toInt() ?? 0,
-            ),
-          )
-          .toList();
-    } catch (_) {}
-    try {
-      peak = (jsonDecode(row['peak_hours'] as String? ?? '[]') as List)
-          .whereType<num>()
-          .map((h) => h.toInt())
-          .toList();
-    } catch (_) {}
-    return DailyFact(
-      date: row['date'] as String? ?? '',
-      activeMin: row['active_min'] as int? ?? 0,
-      idleMin: row['idle_min'] as int? ?? 0,
-      topApps: apps,
-      peakHours: peak,
-      diaryHas: (row['diary_has'] as int? ?? 0) == 1,
     );
   }
 
@@ -313,11 +304,14 @@ class PetDb {
   List<Map<String, Object?>> recentMemoryRows({int limit = 8}) {
     if (_db == null) return const [];
     try {
-      return db.select(
-        'SELECT id, content, category, importance, ts, source FROM memories '
-        'WHERE active = 1 ORDER BY id DESC LIMIT ?',
-        [limit],
-      ).map((row) => Map<String, Object?>.from(row)).toList();
+      return db
+          .select(
+            'SELECT id, content, category, importance, ts, source FROM memories '
+            'WHERE active = 1 ORDER BY id DESC LIMIT ?',
+            [limit],
+          )
+          .map((row) => Map<String, Object?>.from(row))
+          .toList();
     } catch (e) {
       PetLog.e('db: recent memories error: $e');
       return const [];
@@ -327,6 +321,20 @@ class PetDb {
   void deleteMemory(int id) {
     if (_db == null) return;
     db.execute('UPDATE memories SET active = 0 WHERE id = ?', [id]);
+  }
+
+  void updateMemory(
+    int id, {
+    required String content,
+    required String category,
+    required int importance,
+  }) {
+    if (_db == null || content.trim().isEmpty) return;
+    db.execute(
+      'UPDATE memories SET content = ?, category = ?, importance = ? '
+      'WHERE id = ? AND active = 1',
+      [content.trim(), category, importance.clamp(1, 5), id],
+    );
   }
 
   /// 召回：先按子串匹配，不足再按重要性补足（本地小规模用 LIKE 足够）。
@@ -379,10 +387,239 @@ class PetDb {
   void clearMemories() {
     if (_db == null) return;
     try {
+      db.execute('BEGIN IMMEDIATE');
       db.execute('DELETE FROM memories');
-      PetLog.i('db: memories cleared');
+      db.execute('DELETE FROM memory_candidates');
+      db.execute('COMMIT');
+      PetLog.i('db: memories and candidates cleared');
     } catch (e) {
+      try {
+        db.execute('ROLLBACK');
+      } catch (_) {}
       PetLog.e('db: clearMemories error: $e');
+    }
+  }
+
+  // ---- 候选记忆：模型建议，用户确认后才可召回 ----
+
+  bool addMemoryCandidate(
+    String content, {
+    String category = 'fact',
+    int importance = 1,
+    String source = 'model-suggested',
+  }) {
+    final value = content.trim();
+    if (_db == null || value.isEmpty) return false;
+    try {
+      final remembered = db.select(
+        'SELECT 1 FROM memories WHERE active = 1 AND content = ? LIMIT 1',
+        [value],
+      );
+      if (remembered.isNotEmpty) return false;
+      // A rejected exact candidate remains a durable user decision and should
+      // not be suggested again on every similar conversation.
+      final existing = db.select(
+        'SELECT 1 FROM memory_candidates WHERE content = ? LIMIT 1',
+        [value],
+      );
+      if (existing.isNotEmpty) return false;
+      db.execute(
+        'INSERT INTO memory_candidates('
+        'content, category, importance, ts, source, status) '
+        "VALUES (?, ?, ?, ?, ?, 'pending')",
+        [
+          value,
+          category,
+          importance.clamp(1, 5),
+          DateTime.now().toIso8601String(),
+          source,
+        ],
+      );
+      return true;
+    } catch (e) {
+      PetLog.e('db: add memory candidate error: $e');
+      return false;
+    }
+  }
+
+  int pendingMemoryCount() {
+    if (_db == null) return 0;
+    final rows = db.select(
+      "SELECT COUNT(*) AS c FROM memory_candidates WHERE status = 'pending'",
+    );
+    return rows.first['c'] as int? ?? 0;
+  }
+
+  List<Map<String, Object?>> recentMemoryCandidates({int limit = 50}) {
+    if (_db == null) return const [];
+    return db
+        .select(
+          'SELECT id, content, category, importance, ts, source '
+          "FROM memory_candidates WHERE status = 'pending' "
+          'ORDER BY id DESC LIMIT ?',
+          [limit],
+        )
+        .map((row) => Map<String, Object?>.from(row))
+        .toList();
+  }
+
+  bool approveMemoryCandidate(int id) {
+    if (_db == null) return false;
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      final rows = db.select(
+        'SELECT content, category, importance FROM memory_candidates '
+        "WHERE id = ? AND status = 'pending' LIMIT 1",
+        [id],
+      );
+      if (rows.isEmpty) {
+        db.execute('ROLLBACK');
+        return false;
+      }
+      final row = rows.first;
+      final content = '${row['content']}';
+      final duplicate = db.select(
+        'SELECT 1 FROM memories WHERE active = 1 AND content = ? LIMIT 1',
+        [content],
+      );
+      if (duplicate.isEmpty) {
+        db.execute(
+          'INSERT INTO memories('
+          'content, category, importance, ts, source, active) '
+          'VALUES (?, ?, ?, ?, ?, 1)',
+          [
+            content,
+            '${row['category']}',
+            (row['importance'] as num?)?.toInt().clamp(1, 5) ?? 1,
+            DateTime.now().toIso8601String(),
+            'user-approved',
+          ],
+        );
+      }
+      db.execute(
+        "UPDATE memory_candidates SET status = 'approved' WHERE id = ?",
+        [id],
+      );
+      db.execute('COMMIT');
+      return true;
+    } catch (e) {
+      try {
+        db.execute('ROLLBACK');
+      } catch (_) {}
+      PetLog.e('db: approve memory candidate error: $e');
+      return false;
+    }
+  }
+
+  bool rejectMemoryCandidate(int id) {
+    if (_db == null) return false;
+    try {
+      final pending = db.select(
+        'SELECT 1 FROM memory_candidates '
+        "WHERE id = ? AND status = 'pending' LIMIT 1",
+        [id],
+      );
+      if (pending.isEmpty) return false;
+      db.execute(
+        "UPDATE memory_candidates SET status = 'rejected' "
+        "WHERE id = ? AND status = 'pending'",
+        [id],
+      );
+      return true;
+    } catch (e) {
+      PetLog.e('db: reject memory candidate error: $e');
+      return false;
+    }
+  }
+
+  // ---- 主动交互审计与 Agent 状态 ----
+
+  void recordProactiveEvent({
+    required String triggerId,
+    required String label,
+    required String reason,
+    String state = 'fired',
+    DateTime? at,
+  }) {
+    if (_db == null) return;
+    db.execute(
+      'INSERT INTO proactive_events(trigger_id, label, reason, state, ts) '
+      'VALUES (?, ?, ?, ?, ?)',
+      [
+        triggerId,
+        label,
+        reason,
+        state,
+        (at ?? DateTime.now()).toIso8601String(),
+      ],
+    );
+  }
+
+  List<Map<String, Object?>> recentProactiveEvents({int limit = 8}) {
+    if (_db == null) return const [];
+    return db
+        .select(
+          'SELECT id, trigger_id, label, reason, state, ts '
+          'FROM proactive_events ORDER BY id DESC LIMIT ?',
+          [limit],
+        )
+        .map((row) => Map<String, Object?>.from(row))
+        .toList();
+  }
+
+  DateTime? latestProactiveAt({String? triggerId}) {
+    if (_db == null) return null;
+    final rows = triggerId == null
+        ? db.select(
+            "SELECT ts FROM proactive_events WHERE state = 'fired' "
+            'ORDER BY id DESC LIMIT 1',
+          )
+        : db.select(
+            "SELECT ts FROM proactive_events WHERE state = 'fired' "
+            'AND trigger_id = ? ORDER BY id DESC LIMIT 1',
+            [triggerId],
+          );
+    if (rows.isEmpty) return null;
+    return DateTime.tryParse('${rows.first['ts']}');
+  }
+
+  int proactiveCountSince(DateTime since) {
+    if (_db == null) return 0;
+    final rows = db.select(
+      "SELECT COUNT(*) AS c FROM proactive_events WHERE state = 'fired' "
+      'AND ts >= ?',
+      [since.toIso8601String()],
+    );
+    return rows.first['c'] as int? ?? 0;
+  }
+
+  void trimProactiveEvents({int keep = 300}) {
+    if (_db == null) return;
+    db.execute(
+      'DELETE FROM proactive_events WHERE id NOT IN '
+      '(SELECT id FROM proactive_events ORDER BY id DESC LIMIT ?)',
+      [keep],
+    );
+  }
+
+  void setAgentState(String state, String detail, {DateTime? at}) {
+    setKv(
+      'agent_runtime',
+      jsonEncode({
+        'state': state,
+        'detail': detail,
+        'updatedAt': (at ?? DateTime.now()).toIso8601String(),
+      }),
+    );
+  }
+
+  Map<String, dynamic>? agentState() {
+    final raw = getKv('agent_runtime');
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
     }
   }
 

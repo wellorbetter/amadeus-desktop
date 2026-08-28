@@ -4,20 +4,66 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../services/activity_history.dart';
 import '../services/pet_config.dart';
 import '../services/pet_db.dart';
 import '../services/pet_logger.dart';
 import '../services/pet_memory.dart';
+import '../services/pet_secret_store.dart';
+import 'activity_workspace.dart';
+import 'amadeus_theme.dart';
 
-/// 设置页（独立设置窗口内容，Material3 简洁风格）：
-/// - 三个 Tab：外观 / 对话 / 系统
-/// - 所有修改即时写入 config.json，并通过跨窗口通道通知桌宠热生效
+enum _SettingsSection {
+  overview,
+  appearance,
+  activity,
+  interaction,
+  intelligence,
+  privacy,
+}
+
+extension on _SettingsSection {
+  String get label => switch (this) {
+    _SettingsSection.overview => 'Agent 概览',
+    _SettingsSection.appearance => '形象与外观',
+    _SettingsSection.activity => '活动工作台',
+    _SettingsSection.interaction => '主动性',
+    _SettingsSection.intelligence => '能力与人格',
+    _SettingsSection.privacy => '记忆与隐私',
+  };
+
+  IconData get icon => switch (this) {
+    _SettingsSection.overview => Icons.space_dashboard_outlined,
+    _SettingsSection.appearance => Icons.palette_outlined,
+    _SettingsSection.activity => Icons.monitor_heart_outlined,
+    _SettingsSection.interaction => Icons.notifications_active_outlined,
+    _SettingsSection.intelligence => Icons.psychology_alt_outlined,
+    _SettingsSection.privacy => Icons.shield_outlined,
+  };
+
+  String get description => switch (this) {
+    _SettingsSection.overview => '运行状态与关键入口',
+    _SettingsSection.appearance => '本地形象、窗口和气泡',
+    _SettingsSection.activity => '观察状态、节奏投影与来源控制',
+    _SettingsSection.interaction => '触发条件、频率和休眠',
+    _SettingsSection.intelligence => '对话服务与人格边界',
+    _SettingsSection.privacy => '本地数据、日志与系统行为',
+  };
+}
+
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, this.onClose, this.config});
+  const SettingsPage({
+    super.key,
+    this.onClose,
+    this.config,
+    this.activityHistory,
+    this.demoCycleInterval,
+  });
 
-  /// 关闭回调（桌面窗口用系统关闭按钮即可，可空）。
   final VoidCallback? onClose;
   final PetConfig? config;
+  final ActivityHistory? activityHistory;
+  final Duration? demoCycleInterval;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -25,81 +71,106 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   PetConfig get cfg => widget.config ?? PetConfig.instance;
-  static const _modelOptions = <String>[
-    'gpt-5.6-luna',
-    'gpt-5.6-sol',
-    'gpt-4.1-mini',
-    'deepseek-chat',
-    'custom',
-  ];
 
-  Timer? _textDebounce;
+  _SettingsSection _section = _SettingsSection.overview;
+  Timer? _commitTimer;
+  Timer? _secretCommitTimer;
+  Timer? _demoTimer;
   bool _disposing = false;
-  final TextEditingController _baseUrlCtrl = TextEditingController();
-  final TextEditingController _modelCtrl = TextEditingController();
-  final TextEditingController _apiKeyCtrl = TextEditingController();
-  final TextEditingController _modelPathCtrl = TextEditingController();
-  final TextEditingController _soulFileCtrl = TextEditingController();
-  final TextEditingController _soulTextCtrl = TextEditingController();
+  bool _apiKeyVisible = false;
+  bool _navCollapsed = false;
+  bool _savePending = false;
+
+  final _baseUrl = TextEditingController();
+  final _model = TextEditingController();
+  final _apiKey = TextEditingController();
+  final _modelPath = TextEditingController();
+  final _soulFile = TextEditingController();
+  final _soulText = TextEditingController();
+  final _excludedApps = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _syncControllersFromConfig();
+    _navCollapsed = cfg.settingsSidebarCollapsed;
+    _syncControllers();
+    final demoCycleInterval = widget.demoCycleInterval;
+    if (demoCycleInterval != null) {
+      _demoTimer = Timer.periodic(demoCycleInterval, (_) {
+        if (!mounted) return;
+        final next = (_section.index + 1) % _SettingsSection.values.length;
+        setState(() => _section = _SettingsSection.values[next]);
+      });
+    }
   }
 
-  void _syncControllersFromConfig() {
-    _baseUrlCtrl.text = cfg.aiBaseUrl;
-    _modelCtrl.text = cfg.aiModel;
-    _apiKeyCtrl.text = cfg.aiApiKey;
-    _modelPathCtrl.text = cfg.modelPath;
-    _soulFileCtrl.text = cfg.soulFile;
-    _soulTextCtrl.text = cfg.soulText;
+  void _syncControllers() {
+    _baseUrl.text = cfg.aiBaseUrl;
+    _model.text = cfg.aiModel;
+    _apiKey.text = cfg.aiApiKey;
+    _modelPath.text = cfg.modelPath;
+    _soulFile.text = cfg.soulFile;
+    _soulText.text = cfg.soulText;
+    _excludedApps.text = cfg.activityExcludedApps.join(', ');
   }
 
   @override
   void dispose() {
     _disposing = true;
-    _commitNow();
-    _textDebounce?.cancel();
-    _baseUrlCtrl.dispose();
-    _modelCtrl.dispose();
-    _apiKeyCtrl.dispose();
-    _modelPathCtrl.dispose();
-    _soulFileCtrl.dispose();
-    _soulTextCtrl.dispose();
+    _commitTimer?.cancel();
+    final secretPending = _secretCommitTimer?.isActive ?? false;
+    _secretCommitTimer?.cancel();
+    _demoTimer?.cancel();
+    if (secretPending) {
+      unawaited(PetSecretStore.instance.saveApiKey(cfg, cfg.aiApiKey));
+    }
+    _saveNow();
+    for (final controller in [
+      _baseUrl,
+      _model,
+      _apiKey,
+      _modelPath,
+      _soulFile,
+      _soulText,
+      _excludedApps,
+    ]) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
-  /// 保存配置并通知桌宠窗口热生效（跨窗口通道）。
-  void _commit() => _debouncedCommit();
+  void _commit() {
+    _commitTimer?.cancel();
+    _commitTimer = Timer(const Duration(milliseconds: 350), _saveNow);
+    if (mounted) setState(() => _savePending = true);
+  }
 
-  void _commitNow() {
+  void _saveNow() {
     cfg.save();
     PetLog.i('settings: committed');
-    _notifyPet();
-    if (mounted && !_disposing) setState(() {});
-  }
-
-  void _debouncedCommit() {
-    _textDebounce?.cancel();
-    _textDebounce = Timer(const Duration(milliseconds: 400), _commitNow);
-  }
-
-  void _notifyPet() {
     try {
       const WindowMethodChannel(
         'pet',
         mode: ChannelMode.unidirectional,
       ).invokeMethod('config-changed').catchError((_) {});
     } catch (_) {}
+    if (mounted && !_disposing) setState(() => _savePending = false);
+  }
+
+  void _commitApiKey(String value) {
+    cfg.aiApiKey = value.trim();
+    _secretCommitTimer?.cancel();
+    if (mounted) setState(() => _savePending = true);
+    _secretCommitTimer = Timer(const Duration(milliseconds: 650), () async {
+      await PetSecretStore.instance.saveApiKey(cfg, cfg.aiApiKey);
+      _saveNow();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: Colors.transparent,
       body: DecoratedBox(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -108,558 +179,165 @@ class _SettingsPageState extends State<SettingsPage> {
             colors: [
               scheme.surface,
               Color.alphaBlend(
-                scheme.primary.withValues(alpha: 0.055),
+                scheme.primary.withValues(alpha: 0.045),
                 scheme.surface,
               ),
-              scheme.surfaceContainerLowest,
             ],
           ),
         ),
-        child: DefaultTabController(
-          length: 3,
-          child: Column(
-            children: [
-              _header(scheme),
-              TabBar(
-                tabs: const [
-                  Tab(text: '外观', height: 40),
-                  Tab(text: '对话', height: 40),
-                  Tab(text: '系统', height: 40),
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 820;
+              return Column(
+                children: [
+                  _titleBar(compact),
+                  Divider(height: 1, color: scheme.outlineVariant),
+                  Expanded(
+                    child: compact
+                        ? Column(
+                            children: [
+                              _compactNavigation(),
+                              Expanded(child: _content(compact: true)),
+                            ],
+                          )
+                        : Row(
+                            children: [
+                              _navigationRail(),
+                              VerticalDivider(
+                                width: 1,
+                                color: scheme.outlineVariant,
+                              ),
+                              Expanded(child: _content(compact: false)),
+                            ],
+                          ),
+                  ),
                 ],
-                labelStyle: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-                unselectedLabelStyle: const TextStyle(fontSize: 13),
-                indicatorSize: TabBarIndicatorSize.label,
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: TabBarView(
-                  children: [_buildAppearance(), _buildChat(), _buildSystem()],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _header(ColorScheme scheme) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-      child: Row(
-        children: [
-          Icon(Icons.tune_rounded, size: 20, color: scheme.primary),
-          const SizedBox(width: 8),
-          Text(
-            '设置',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              color: scheme.onSurface,
-            ),
-          ),
-          const Spacer(),
-          if (widget.onClose != null)
-            IconButton(
-              onPressed: widget.onClose,
-              icon: const Icon(Icons.close_rounded, size: 20),
-              tooltip: '关闭',
-              visualDensity: VisualDensity.compact,
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAppearance() {
-    return _list([
-      _switch('深色模式', '设置窗口使用深色还是浅色主题。', cfg.darkMode, (v) {
-        cfg.darkMode = v;
-        _commit();
-      }),
-      _slider(
-        '设置窗口透明度',
-        '调整整个设置窗口与桌面背景的融合程度；文字也会一起变淡。',
-        cfg.settingsOpacity,
-        0.75,
-        1.0,
-        (v) {
-          cfg.settingsOpacity = v;
-          windowManager.setOpacity(v);
-          _commit();
-        },
-        (v) => '${(v * 100).round()}%',
-      ),
-      _slider(
-        '模型大小',
-        'Live2D 模型相对画布的缩放。',
-        cfg.modelScale,
-        0.7,
-        3.0,
-        (v) {
-          cfg.modelScale = v;
-          _commit();
-        },
-        (v) => '${(v * 100).round()}%',
-      ),
-      _slider(
-        '模型垂直偏移',
-        '0 是聊天输入区上方的基准位置；负值继续向下，正值向上。底部聊天区预留不会由此滑块移除。',
-        cfg.vOffset.toDouble(),
-        -160,
-        160,
-        (v) {
-          cfg.vOffset = v.round();
-          _commit();
-        },
-        (v) => '${v.round()}px',
-      ),
-      _slider('模型透明度', '模型整体透明度。', cfg.modelOpacity, 0.3, 1.0, (v) {
-        cfg.modelOpacity = v;
-        _commit();
-      }, (v) => '${(v * 100).round()}%'),
-      _slider('气泡字号', '对话气泡文字大小。', cfg.bubbleFontSize, 10, 18, (v) {
-        cfg.bubbleFontSize = v;
-        _commit();
-      }, (v) => v.toStringAsFixed(1)),
-      _slider(
-        '气泡显示时长',
-        '气泡出现后多少秒自动隐藏。',
-        cfg.bubbleAutoHideSeconds.toDouble(),
-        3,
-        30,
-        (v) {
-          cfg.bubbleAutoHideSeconds = v.round();
-          _commit();
-        },
-        (v) => '${v.round()}s',
-      ),
-      _textField(
-        '模型路径',
-        _modelPathCtrl,
-        (v) {
-          cfg.modelPath = v.trim();
-          _debouncedCommit();
-        },
-        hint: '留空自动扫描 exe 目录/models 与 %APPDATA%/timepet/models',
-        help:
-            '插件化模型：指向 Live2D 模型的 *.model.json（Cubism 2.1，绝对路径）。模型文件不入库、不入安装包，版权由你自行确认。',
-      ),
-    ]);
-  }
-
-  Widget _buildChat() {
-    return _list([
-      _switch('主动聊天', '关闭后红莉栖不会主动找你。', cfg.proactiveEnabled, (v) {
-        cfg.proactiveEnabled = v;
-        _commit();
-      }),
-      _slider(
-        '最小间隔',
-        '两次主动聊天的最小间隔（分钟）。',
-        cfg.minIntervalMinutes,
-        5,
-        120,
-        (v) {
-          cfg.minIntervalMinutes = v;
-          _commit();
-        },
-        (v) => '${v.round()} 分钟',
-      ),
-      _slider('每小时上限', '每小时最多主动聊天次数。', cfg.maxPerHour.toDouble(), 1, 10, (v) {
-        cfg.maxPerHour = v.round();
-        _commit();
-      }, (v) => '${v.round()} 次'),
-      _slider(
-        '随机搭话概率',
-        '每分钟评估时的随机搭话概率。',
-        cfg.randomNudgeChance,
-        0,
-        1,
-        (v) {
-          cfg.randomNudgeChance = v;
-          _commit();
-        },
-        (v) => '${(v * 100).round()}%',
-      ),
-      _slider(
-        '久坐阈值',
-        '连续使用多少分钟算「久坐」。',
-        cfg.longSessionMinutes.toDouble(),
-        30,
-        300,
-        (v) {
-          cfg.longSessionMinutes = v.round();
-          _commit();
-        },
-        (v) => '${v.round()} 分钟',
-      ),
-      _group('触发场景', [
-        _miniSwitch('整点', cfg.triggerHourly, (v) {
-          cfg.triggerHourly = v;
-          _commit();
-        }),
-        _miniSwitch('深夜', cfg.triggerLateNight, (v) {
-          cfg.triggerLateNight = v;
-          _commit();
-        }),
-        _miniSwitch('久坐', cfg.triggerLongSession, (v) {
-          cfg.triggerLongSession = v;
-          _commit();
-        }),
-        _miniSwitch('切窗激增', cfg.triggerAppSwitchSpike, (v) {
-          cfg.triggerAppSwitchSpike = v;
-          _commit();
-        }),
-        _miniSwitch('随机', cfg.triggerRandomNudge, (v) {
-          cfg.triggerRandomNudge = v;
-          _commit();
-        }),
-        _miniSwitch('空闲归来', cfg.triggerIdleReturn, (v) {
-          cfg.triggerIdleReturn = v;
-          _commit();
-        }, help: '离开电脑又回来后，她主动打个招呼。'),
-        _miniSwitch('专注提醒', cfg.triggerFocusReminder, (v) {
-          cfg.triggerFocusReminder = v;
-          _commit();
-        }, help: '盯着同一应用超过 1.5 小时，提醒你休息。'),
-        _miniSwitch('记忆关心', cfg.triggerMemoryNudge, (v) {
-          cfg.triggerMemoryNudge = v;
-          _commit();
-        }, help: '聊过的重要事（目标/偏好），过会儿她自然提起。'),
-      ]),
-      _group('省电休眠', [
-        _miniSwitch(
-          '空闲休眠',
-          cfg.sleepEnabled,
-          (v) {
-            cfg.sleepEnabled = v;
-            _commit();
-          },
-          help: '连续空闲超过阈值后进入休眠：停止主动说话与记忆审核，省 API 费用；你一回来就自动唤醒。',
-        ),
-        _miniSwitch('忙时少打扰', cfg.adaptiveFrequency, (v) {
-          cfg.adaptiveFrequency = v;
-          _commit();
-        }, help: '今天活跃时间很长且正在忙时，自动拉长间隔、降低打扰上限。'),
-        _slider(
-          '休眠阈值',
-          '连续空闲多少分钟进入休眠（期间完全不调用 AI）。',
-          cfg.sleepIdleMinutes.toDouble(),
-          5,
-          60,
-          (v) {
-            cfg.sleepIdleMinutes = v.round();
-            _commit();
-          },
-          (v) => '${v.round()} 分钟',
-        ),
-      ]),
-      _slider(
-        '输入框收起时长',
-        '聊天输入框无操作多少秒后自动收起。',
-        cfg.chatAutoHideSeconds.toDouble(),
-        5,
-        120,
-        (v) {
-          cfg.chatAutoHideSeconds = v.round();
-          _commit();
-        },
-        (v) => '${v.round()}s',
-      ),
-    ]);
-  }
-
-  Widget _modelRouteSelector() {
-    final selected = _modelOptions.contains(cfg.aiModel)
-        ? cfg.aiModel
-        : 'custom';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: DropdownButtonFormField<String>(
-        initialValue: selected,
-        decoration: const InputDecoration(
-          labelText: '选择对话模型',
-          helperText: '选择模型即可；API 密钥仍从系统环境变量读取，不会写入配置文件。',
-          isDense: true,
-        ),
-        items: const [
-          DropdownMenuItem(
-            value: 'gpt-5.6-luna',
-            child: Text('GPT Luna（快速聊天）'),
-          ),
-          DropdownMenuItem(value: 'gpt-5.6-sol', child: Text('GPT Sol（复杂任务）')),
-          DropdownMenuItem(
-            value: 'gpt-4.1-mini',
-            child: Text('GPT 4.1 Mini（轻量）'),
-          ),
-          DropdownMenuItem(
-            value: 'deepseek-chat',
-            child: Text('DeepSeek Chat'),
-          ),
-          DropdownMenuItem(value: 'custom', child: Text('自定义兼容接口')),
-        ],
-        onChanged: (value) {
-          if (value == null || value == 'custom') return;
-          cfg.aiModel = value;
-          _modelCtrl.text = value;
-          if (value == 'deepseek-chat') {
-            cfg.aiBaseUrl = 'https://api.deepseek.com/v1';
-            _baseUrlCtrl.text = cfg.aiBaseUrl;
-          } else {
-            cfg.aiBaseUrl = 'https://api.openai.com/v1';
-            _baseUrlCtrl.text = cfg.aiBaseUrl;
-          }
-          _commit();
-          setState(() {});
-        },
-      ),
-    );
-  }
-
-  Widget _buildSystem() {
-    return _buildSystemNew();
-  }
-
-  /*
-    return _list([
-      _connectionCard(),
-      _memoryPreview(),
-      _soulCard(),
-      _switch('鍚敤 AI', '鍏抽棴鍚庡璇濊蛋鏈湴鍏滃簳鏂囨銆?, cfg.aiEnabled, (v) {
-        cfg.aiEnabled = v;
-        _commit();
-      }),
-      _group('绐楀彛', [
-        _miniSwitch('妗屽疇濮嬬粓缃《', cfg.alwaysOnTop, (v) {
-          cfg.alwaysOnTop = v;
-          _commit();
-        }),
-        _miniSwitch('绐楀彛鑷€傚簲妯″瀷', cfg.autoFitWindow, (v) {
-          cfg.autoFitWindow = v;
-          _commit();
-        }),
-        _miniSwitch('鍚姩鏃舵樉绀烘瀹?, cfg.startVisible, (v) {
-          cfg.startVisible = v;
-          _commit();
-        }),
-      ]),
-      TextButton.icon(
-        onPressed: () {
-          _textDebounce?.cancel();
-          cfg.resetToDefaults();
-          _syncControllersFromConfig();
-          _notifyPet();
-          setState(() {});
-        },
-        icon: const Icon(Icons.restore_rounded, size: 16),
-        label: const Text('鎭㈠榛樿璁剧疆'),
-      ),
-    ]);
-  }
-
-  Widget _connectionCard() {
-    final labels = <String, String>{
-      'openai_api_key': 'OpenAI API Key',
-      'deepseek_api_key': 'DeepSeek API Key',
-      'custom': '自定义兼容接口',
-      'codex_login': 'ChatGPT / Codex 登录',
-    };
-    final mode = labels[cfg.aiAuthMode] ?? labels['custom']!;
-    final configured = cfg.aiAuthMode == 'codex_login'
-        ? false
-        : cfg.aiApiKey.trim().isNotEmpty;
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.account_tree_outlined),
-        title: const Text('对话接入方式'),
-        subtitle: Text('$mode · ${configured ? '已配置' : '需要配置'}'),
-        trailing: const Icon(Icons.chevron_right_rounded),
-        onTap: () async {
-          await Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => _ConnectionPage(config: cfg)),
-          );
-          if (mounted) setState(() {});
-        },
-      ),
-    );
-  }
-
-  */
-
-  Widget _buildSystemNew() {
-    return _list([
-      _connectionCardNew(),
-      _memoryPreview(),
-      _soulCard(),
-      _switch(
-        '\u542f\u7528 AI',
-        '\u5173\u95ed\u540e\u4e0d\u518d\u8c03\u7528\u5728\u7ebf\u5bf9\u8bdd\u6a21\u578b\u3002',
-        cfg.aiEnabled,
-        (v) {
-          cfg.aiEnabled = v;
-          _commit();
-        },
-      ),
-      _group('\u7a97\u53e3', [
-        _miniSwitch('\u684c\u5ba0\u7f6e\u9876', cfg.alwaysOnTop, (v) {
-          cfg.alwaysOnTop = v;
-          _commit();
-        }),
-        _miniSwitch('\u7a97\u53e3\u9002\u5e94\u6a21\u578b', cfg.autoFitWindow, (
-          v,
-        ) {
-          cfg.autoFitWindow = v;
-          _commit();
-        }),
-        _miniSwitch('\u542f\u52a8\u65f6\u663e\u793a', cfg.startVisible, (v) {
-          cfg.startVisible = v;
-          _commit();
-        }),
-      ]),
-      TextButton.icon(
-        onPressed: () {
-          _textDebounce?.cancel();
-          cfg.resetToDefaults();
-          _syncControllersFromConfig();
-          _notifyPet();
-          setState(() {});
-        },
-        icon: const Icon(Icons.restore_rounded, size: 16),
-        label: const Text('\u6062\u590d\u9ed8\u8ba4\u8bbe\u7f6e'),
-      ),
-    ]);
-  }
-
-  Widget _connectionCardNew() {
-    final labels = <String, String>{
-      'openai_api_key': 'OpenAI API Key',
-      'deepseek_api_key': 'DeepSeek API Key',
-      'custom': '\u81ea\u5b9a\u4e49\u517c\u5bb9\u63a5\u53e3',
-      'codex_login': 'ChatGPT / Codex \u767b\u5f55',
-    };
-    final mode = labels[cfg.aiAuthMode] ?? labels['custom']!;
-    final configured =
-        cfg.aiAuthMode != 'codex_login' && cfg.aiApiKey.trim().isNotEmpty;
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.account_tree_outlined),
-        title: const Text('\u5bf9\u8bdd\u63a5\u5165\u65b9\u5f0f'),
-        subtitle: Text(
-          '$mode · ${configured ? '\u5df2\u914d\u7f6e' : '\u5f85\u914d\u7f6e'}',
-        ),
-        trailing: const Icon(Icons.chevron_right_rounded),
-        onTap: () async {
-          await Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => _ConnectionPage(config: cfg)),
-          );
-          if (mounted) setState(() {});
-        },
-      ),
-    );
-  }
-
-  // Kept temporarily while the secondary connection page settles; remove in
-  // the next cleanup pass once the old settings UI is fully retired.
-  // ignore: unused_element
-  Widget _buildSystemLegacy() {
-    return _list([
-      _memoryPreview(),
-      _modelRouteSelector(),
-      Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: () {
-              _textDebounce?.cancel();
-              cfg.resetToDefaults();
-              _syncControllersFromConfig();
-              _notifyPet();
-              setState(() {});
+              );
             },
-            icon: const Icon(Icons.restore_rounded, size: 16),
-            label: const Text('恢复默认设置'),
           ),
         ),
       ),
-      _switch('启用 AI', '关闭后对话走本地兜底文案。', cfg.aiEnabled, (v) {
-        cfg.aiEnabled = v;
-        _commit();
-      }),
-      if (!_modelOptions.contains(cfg.aiModel))
-        _textField('自定义模型名称', _modelCtrl, (v) {
-          cfg.aiModel = v.trim().isEmpty ? 'gpt-5.6-luna' : v.trim();
-          _debouncedCommit();
-        }, hint: '仅用于自定义兼容接口'),
-      _textField('API 地址', _baseUrlCtrl, (v) {
-        cfg.aiBaseUrl = v.trim().isEmpty
-            ? 'https://api.openai.com/v1'
-            : v.trim();
-        _debouncedCommit();
-      }),
-      _slider(
-        '回答变化度',
-        '只控制回答的稳定程度：低值更稳定，高值更容易换说法；不影响 TimeTrace 语料数量。',
-        cfg.aiTemperature,
-        0,
-        1.5,
-        (v) {
-          cfg.aiTemperature = v;
-          _commit();
-        },
-        (v) => v.toStringAsFixed(2),
-      ),
-      _soulCard(),
-      _group('窗口', [
-        _miniSwitch('桌宠始终置顶', cfg.alwaysOnTop, (v) {
-          cfg.alwaysOnTop = v;
-          _commit();
-        }, help: '开启后桌宠会保持在其他普通窗口上方；不会影响设置窗口。'),
-        _miniSwitch('窗口自适应模型', cfg.autoFitWindow, (v) {
-          cfg.autoFitWindow = v;
-          _commit();
-        }, help: '启动时按模型比例自动调整窗口大小，避免大块透明留白。'),
-        _miniSwitch('启动时显示桌宠', cfg.startVisible, (v) {
-          cfg.startVisible = v;
-          _commit();
-        }),
-      ]),
-      _note(
-        'API Key 通过环境变量 OPENAI_API_KEY 提供；DeepSeek API 使用 DEEPSEEK_API_KEY。',
-      ),
-    ]);
-  }
-
-  Widget _list(List<Widget> children) {
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      children: children,
     );
   }
 
-  Widget _memoryPreview() {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 6),
+  Widget _titleBar(bool compact) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 64,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Row(
           children: [
-            const Icon(Icons.psychology_outlined, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '长期记忆：${PetMemory.instance.memoryCount()} 条\n查看、搜索或删除已审核的记忆。',
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [AmadeusTheme.wineLight, AmadeusTheme.wine],
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.graphic_eq_rounded,
+                size: 19,
+                color: Colors.white,
               ),
             ),
-            TextButton(
-              onPressed: () => Navigator.of(
-                context,
-              ).push(MaterialPageRoute(builder: (_) => const _MemoryPage())),
-              child: const Text('打开'),
+            const SizedBox(width: 11),
+            Text(
+              'Amadeus',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+              ),
+            ),
+            if (!compact) ...[
+              const SizedBox(width: 10),
+              Container(width: 1, height: 18, color: scheme.outlineVariant),
+              const SizedBox(width: 10),
+              Text('设置', style: TextStyle(color: scheme.onSurfaceVariant)),
+            ],
+            const Spacer(),
+            if (!compact) ...[
+              _StatusPill(
+                color: _savePending ? scheme.secondary : AmadeusTheme.sage,
+                text: _savePending ? '正在保存' : '已保存',
+              ),
+              const SizedBox(width: 8),
+            ],
+            _StatusPill(
+              color: cfg.aiEnabled ? AmadeusTheme.mint : scheme.outline,
+              text: cfg.aiEnabled ? 'AI 已启用' : 'AI 已暂停',
+            ),
+            const SizedBox(width: 8),
+            if (widget.onClose != null)
+              IconButton(
+                onPressed: widget.onClose,
+                icon: const Icon(Icons.close_rounded),
+                tooltip: '关闭',
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _navigationRail() {
+    final scheme = Theme.of(context).colorScheme;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      width: _navCollapsed ? 78 : 224,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 18, 14, 14),
+        child: Column(
+          children: [
+            for (final item in _SettingsSection.values)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 5),
+                child: _NavTile(
+                  selected: item == _section,
+                  icon: item.icon,
+                  label: item.label,
+                  compact: _navCollapsed,
+                  onTap: () => setState(() => _section = item),
+                ),
+              ),
+            const Spacer(),
+            if (!_navCollapsed)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: scheme.outlineVariant),
+                ),
+                child: Text(
+                  'Rust 在落盘前过滤，Flutter 只消费本机短期事件流与投影视图。',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 12,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Tooltip(
+              message: _navCollapsed ? '展开侧边栏' : '收起侧边栏',
+              child: IconButton(
+                onPressed: () {
+                  setState(() => _navCollapsed = !_navCollapsed);
+                  cfg.settingsSidebarCollapsed = _navCollapsed;
+                  _commit();
+                },
+                icon: Icon(
+                  _navCollapsed
+                      ? Icons.keyboard_double_arrow_right_rounded
+                      : Icons.keyboard_double_arrow_left_rounded,
+                ),
+              ),
             ),
           ],
         ),
@@ -667,591 +345,1679 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _soulCard() {
-    final text = cfg.soulText.trim();
-    final preview = text.isEmpty
-        ? '当前使用默认人格。'
-        : text
-              .replaceAll('\n', ' ')
-              .substring(0, text.length > 90 ? 90 : text.length);
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      child: ListTile(
-        leading: const Icon(Icons.auto_awesome_outlined),
-        title: const Text('人格内容'),
-        subtitle: Text('$preview\n影响下一次对话的角色语气，不是 TimeTrace 语料设置。'),
-        isThreeLine: true,
-        trailing: TextButton(
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => _SoulPage(initial: cfg.soulText)),
+  Widget _compactNavigation() {
+    final scheme = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Row(
+        children: [
+          for (final item in _SettingsSection.values)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                selected: item == _section,
+                avatar: Icon(item.icon, size: 17),
+                label: Text(item.label),
+                onSelected: (_) => setState(() => _section = item),
+                side: BorderSide(color: scheme.outlineVariant),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _content({required bool compact}) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.018, 0),
+            end: Offset.zero,
+          ).animate(animation),
+          child: child,
+        ),
+      ),
+      child: SingleChildScrollView(
+        key: ValueKey(_section),
+        padding: compact
+            ? const EdgeInsets.fromLTRB(18, 20, 18, 36)
+            : const EdgeInsets.fromLTRB(32, 28, 32, 44),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 960),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _section.label,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _section.description,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                switch (_section) {
+                  _SettingsSection.overview => _overview(),
+                  _SettingsSection.appearance => _appearance(),
+                  _SettingsSection.activity => _activity(),
+                  _SettingsSection.interaction => _interaction(),
+                  _SettingsSection.intelligence => _intelligence(),
+                  _SettingsSection.privacy => _privacy(),
+                },
+              ],
+            ),
           ),
-          child: const Text('编辑'),
         ),
       ),
     );
   }
 
-  Widget _group(String title, List<Widget> children) {
+  Widget _overview() {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      color: scheme.surfaceContainerLow,
-      elevation: 0,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
+    final modelReady = cfg.modelPath.trim().isNotEmpty;
+    final keyReady = cfg.aiApiKey.trim().isNotEmpty;
+    return Column(
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = constraints.maxWidth < 650;
+            final cards = [
+              _OverviewCard(
+                icon: Icons.view_in_ar_outlined,
+                title: '本地形象',
+                value: modelReady ? '已配置' : '待导入',
+                detail: modelReady ? '模型资源留在本机' : '导入一个拥有使用权的模型包',
+                color: modelReady ? AmadeusTheme.mint : scheme.secondary,
+                onTap: () =>
+                    setState(() => _section = _SettingsSection.appearance),
+              ),
+              _OverviewCard(
+                icon: Icons.psychology_alt_outlined,
+                title: '对话服务',
+                value: cfg.aiEnabled && keyReady ? '可用' : '待配置',
+                detail: cfg.aiEnabled ? cfg.aiModel : '当前已暂停全部在线调用',
+                color: keyReady ? AmadeusTheme.wine : scheme.secondary,
+                onTap: () =>
+                    setState(() => _section = _SettingsSection.intelligence),
+              ),
+              _OverviewCard(
+                icon: Icons.memory_outlined,
+                title: '长期记忆',
+                value: '${_memoryCount()} 条',
+                detail: '仅保存在本机 SQLite',
+                color: AmadeusTheme.blueGrey,
+                onTap: () =>
+                    setState(() => _section = _SettingsSection.privacy),
+              ),
+              _OverviewCard(
+                icon: Icons.timeline_rounded,
+                title: '活动感知',
+                value: !cfg.activityAwarenessEnabled
+                    ? '已关闭'
+                    : (cfg.activityAwarenessPaused ? '已暂停' : '运行中'),
+                detail: '原始事件保留 ${cfg.activityRetentionHours} 小时',
+                color:
+                    cfg.activityAwarenessEnabled && !cfg.activityAwarenessPaused
+                    ? AmadeusTheme.mint
+                    : scheme.outline,
+                onTap: () =>
+                    setState(() => _section = _SettingsSection.activity),
+              ),
+            ];
+            if (stacked) {
+              return Column(
+                children: [
+                  for (final card in cards)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: card,
+                    ),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < cards.length; i++) ...[
+                  Expanded(child: cards[i]),
+                  if (i < cards.length - 1) const SizedBox(width: 12),
+                ],
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        _SettingsCard(
+          title: '能力分层',
+          subtitle: '明确显示已经运行的能力与尚未安装的扩展，不让人格假装“什么都会”。',
+          child: Column(
+            children: const [
+              _ArchitectureRow(
+                icon: Icons.hub_outlined,
+                title: 'Agent Runtime',
+                body: '身份、人格、工作记忆、语义记忆与单次上下文编排',
+                badge: '运行中',
+              ),
+              Divider(height: 24),
+              _ArchitectureRow(
+                icon: Icons.timeline_rounded,
+                title: 'Computer History',
+                body: '短期活动事件与统计，只作为 Lived Context，不写入长期记忆',
+                badge: '运行中',
+              ),
+              Divider(height: 24),
+              _ArchitectureRow(
+                icon: Icons.account_tree_outlined,
+                title: 'Trigger Runtime',
+                body: '候选、抑制、竞争、交付与本机审计分开处理',
+                badge: '运行中',
+              ),
+              Divider(height: 24),
+              _ArchitectureRow(
+                icon: Icons.extension_outlined,
+                title: 'Skill · MCP · Evolve',
+                body: '保留扩展层；当前没有安装 runtime，不会写进能力声明',
+                badge: '待实现',
+              ),
+              Divider(height: 24),
+              _ArchitectureRow(
+                icon: Icons.history_toggle_off_rounded,
+                title: 'TimeTrace 兼容边界',
+                body:
+                    '只读取旧活动数据；完整 Statistics、Diary、Project / Session 与 AI Recap 仍属于 TimeTrace',
+                badge: '独立产品',
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _appearance() => Column(
+    children: [
+      _SettingsCard(
+        title: '形象资源',
+        subtitle: '路径只指向本机文件，不会进入安装包或上传网络。',
+        child: _field(
+          label: 'Live2D 模型路径',
+          controller: _modelPath,
+          hint: '留空时扫描用户数据目录中的 models 文件夹',
+          onChanged: (value) {
+            cfg.modelPath = value.trim();
+            _commit();
+          },
+        ),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '显示',
+        subtitle: '调整会实时同步到桌宠窗口。',
+        child: Column(
+          children: [
+            _switchRow('深色设置界面', '只影响设置窗口，不改变模型素材。', cfg.darkMode, (v) {
+              cfg.darkMode = v;
+              _commit();
+            }),
+            _sliderRow('设置窗口透明度', cfg.settingsOpacity, 0.75, 1, (v) {
+              cfg.settingsOpacity = v;
+              windowManager.setOpacity(v);
+              _commit();
+            }, (v) => '${(v * 100).round()}%'),
+            _sliderRow('模型大小', cfg.modelScale, 0.7, 3, (v) {
+              cfg.modelScale = v;
+              _commit();
+            }, (v) => '${(v * 100).round()}%'),
+            _sliderRow('模型垂直偏移', cfg.vOffset.toDouble(), -160, 160, (v) {
+              cfg.vOffset = v.round();
+              _commit();
+            }, (v) => '${v.round()} px'),
+            _sliderRow('模型透明度', cfg.modelOpacity, 0.3, 1, (v) {
+              cfg.modelOpacity = v;
+              _commit();
+            }, (v) => '${(v * 100).round()}%'),
+            _sliderRow('气泡字号', cfg.bubbleFontSize, 10, 18, (v) {
+              cfg.bubbleFontSize = v;
+              _commit();
+            }, (v) => v.toStringAsFixed(1)),
+            _sliderRow('气泡显示时长', cfg.bubbleAutoHideSeconds.toDouble(), 3, 30, (
+              v,
+            ) {
+              cfg.bubbleAutoHideSeconds = v.round();
+              _commit();
+            }, (v) => '${v.round()} 秒'),
+          ],
+        ),
+      ),
+    ],
+  );
+
+  Widget _activity() => ActivityWorkspace(
+    config: cfg,
+    excludedAppsController: _excludedApps,
+    onChanged: _commit,
+    onClear: _confirmClearActivity,
+    history: widget.activityHistory,
+  );
+
+  Widget _interaction() => Column(
+    children: [
+      _SettingsCard(
+        title: '主动互动',
+        subtitle: '总开关关闭后，Amadeus 只在你主动发起对话时响应。',
+        child: Column(
+          children: [
+            _switchRow('允许主动开口', '仍受最小间隔与每小时上限约束。', cfg.proactiveEnabled, (v) {
+              cfg.proactiveEnabled = v;
+              _commit();
+            }),
+            _sliderRow('最小间隔', cfg.minIntervalMinutes, 5, 120, (v) {
+              cfg.minIntervalMinutes = v;
+              _commit();
+            }, (v) => '${v.round()} 分钟'),
+            _sliderRow('每小时上限', cfg.maxPerHour.toDouble(), 1, 10, (v) {
+              cfg.maxPerHour = v.round();
+              _commit();
+            }, (v) => '${v.round()} 次'),
+            _sliderRow('活跃时长阈值', cfg.longSessionMinutes.toDouble(), 30, 300, (
+              v,
+            ) {
+              cfg.longSessionMinutes = v.round();
+              _commit();
+            }, (v) => '${v.round()} 分钟'),
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '触发条件',
+        subtitle: '条件先生成候选，再经过独立冷却、忙碌与安静时段筛选；代码排列不再代表优先级。',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: scheme.primary,
-              ),
+            _triggerGroup(
+              title: '健康关心',
+              detail: '最高优先级；忙碌和安静时段仍可低频出现。',
+              children: [
+                _triggerChip(
+                  '深夜',
+                  Icons.bedtime_outlined,
+                  cfg.triggerLateNight,
+                  (v) => cfg.triggerLateNight = v,
+                ),
+                _triggerChip(
+                  '活跃过久',
+                  Icons.airline_seat_recline_normal,
+                  cfg.triggerLongSession,
+                  (v) => cfg.triggerLongSession = v,
+                ),
+                _triggerChip(
+                  '持续专注',
+                  Icons.center_focus_strong_outlined,
+                  cfg.triggerFocusReminder,
+                  (v) => cfg.triggerFocusReminder = v,
+                ),
+              ],
             ),
-            const SizedBox(height: 4),
-            ...children,
+            const Divider(height: 28),
+            _triggerGroup(
+              title: '状态转场',
+              detail: '抓住刚回来或任务变乱的短暂时机。',
+              children: [
+                _triggerChip(
+                  '空闲归来',
+                  Icons.waving_hand_outlined,
+                  cfg.triggerIdleReturn,
+                  (v) => cfg.triggerIdleReturn = v,
+                ),
+                _triggerChip(
+                  '切窗激增',
+                  Icons.swap_horiz_rounded,
+                  cfg.triggerAppSwitchSpike,
+                  (v) => cfg.triggerAppSwitchSpike = v,
+                ),
+              ],
+            ),
+            const Divider(height: 28),
+            _triggerGroup(
+              title: '关系与轻互动',
+              detail: '忙碌或安静时段自动让路，不与健康提醒争抢。',
+              children: [
+                _triggerChip(
+                  '记忆关心',
+                  Icons.favorite_border_rounded,
+                  cfg.triggerMemoryNudge,
+                  (v) => cfg.triggerMemoryNudge = v,
+                ),
+                _triggerChip(
+                  '整点问候',
+                  Icons.schedule_rounded,
+                  cfg.triggerHourly,
+                  (v) => cfg.triggerHourly = v,
+                ),
+                _triggerChip(
+                  '随机搭话',
+                  Icons.casino_outlined,
+                  cfg.triggerRandomNudge,
+                  (v) => cfg.triggerRandomNudge = v,
+                ),
+              ],
+            ),
+            if (cfg.triggerRandomNudge) ...[
+              const SizedBox(height: 8),
+              _sliderRow('随机候选概率', cfg.randomNudgeChance, 0.05, 0.6, (v) {
+                cfg.randomNudgeChance = v;
+                _commit();
+              }, (v) => '${(v * 100).round()}% / 分钟'),
+            ],
           ],
         ),
       ),
-    );
-  }
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '编排规则',
+        subtitle: '同一分钟出现多个条件时，只选择一个最合适的候选。',
+        child: const Column(
+          children: [
+            _ArchitectureRow(
+              icon: Icons.filter_alt_outlined,
+              title: '先抑制',
+              body: '启动保护、用户刚互动、全局间隔、每小时上限、独立冷却',
+              badge: 'Policy',
+            ),
+            Divider(height: 24),
+            _ArchitectureRow(
+              icon: Icons.low_priority_rounded,
+              title: '再竞争',
+              body: '健康关心 → 状态转场 → 关系互动 → 环境搭话',
+              badge: 'One winner',
+            ),
+            Divider(height: 24),
+            _ArchitectureRow(
+              icon: Icons.receipt_long_outlined,
+              title: '可解释',
+              body: '只记录胜出的原因，并说明同时被它让开的其他候选',
+              badge: 'Local audit',
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '为什么主动开口',
+        subtitle: '只有真正展示给你的互动才消耗冷却；生成失败会单独标记。',
+        child: _proactiveAudit(),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '休眠与打扰控制',
+        subtitle: '空闲休眠期间不会调用 AI。',
+        child: Column(
+          children: [
+            _switchRow('空闲时休眠', '回来后自动唤醒。', cfg.sleepEnabled, (v) {
+              cfg.sleepEnabled = v;
+              _commit();
+            }),
+            _switchRow('忙时减少打扰', '活跃时间较长时自动拉长互动间隔。', cfg.adaptiveFrequency, (
+              v,
+            ) {
+              cfg.adaptiveFrequency = v;
+              _commit();
+            }),
+            _switchRow(
+              '安静时段',
+              '${cfg.quietHoursStart}:00–${cfg.quietHoursEnd}:00 只保留低频健康关心。',
+              cfg.quietHoursEnabled,
+              (v) {
+                cfg.quietHoursEnabled = v;
+                _commit();
+              },
+            ),
+            if (cfg.quietHoursEnabled) ...[
+              _sliderRow('开始时间', cfg.quietHoursStart.toDouble(), 0, 23, (v) {
+                cfg.quietHoursStart = v.round();
+                _commit();
+              }, (v) => '${v.round()}:00'),
+              _sliderRow('结束时间', cfg.quietHoursEnd.toDouble(), 0, 23, (v) {
+                cfg.quietHoursEnd = v.round();
+                _commit();
+              }, (v) => '${v.round()}:00'),
+            ],
+            _sliderRow('休眠阈值', cfg.sleepIdleMinutes.toDouble(), 5, 60, (v) {
+              cfg.sleepIdleMinutes = v.round();
+              _commit();
+            }, (v) => '${v.round()} 分钟'),
+          ],
+        ),
+      ),
+    ],
+  );
 
-  Widget _switch(
-    String label,
-    String help,
-    bool value,
-    ValueChanged<bool> onChanged,
-  ) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
+  Widget _intelligence() => Column(
+    children: [
+      _SettingsCard(
+        title: '对话服务',
+        subtitle: 'ChatGPT / Codex 的订阅登录不能直接作为第三方桌面应用的 API 凭据。',
+        trailing: Switch(
+          value: cfg.aiEnabled,
+          onChanged: (v) {
+            cfg.aiEnabled = v;
+            _commit();
+          },
+        ),
+        child: Column(
+          children: [
+            DropdownButtonFormField<String>(
+              initialValue: _providerValue,
+              decoration: const InputDecoration(labelText: '接入方式'),
+              items: const [
+                DropdownMenuItem(
+                  value: 'openai_api_key',
+                  child: Text('OpenAI API Key'),
                 ),
-                if (help.isNotEmpty) _helpButton(help),
+                DropdownMenuItem(
+                  value: 'deepseek_api_key',
+                  child: Text('DeepSeek API Key'),
+                ),
+                DropdownMenuItem(
+                  value: 'custom',
+                  child: Text('自定义 OpenAI 兼容接口'),
+                ),
               ],
+              onChanged: (value) {
+                if (value == null) return;
+                cfg.aiAuthMode = value;
+                if (value == 'openai_api_key') {
+                  cfg.aiBaseUrl = 'https://api.openai.com/v1';
+                } else if (value == 'deepseek_api_key') {
+                  cfg.aiBaseUrl = 'https://api.deepseek.com/v1';
+                  if (cfg.aiModel.startsWith('gpt-')) {
+                    cfg.aiModel = 'deepseek-chat';
+                  }
+                }
+                _baseUrl.text = cfg.aiBaseUrl;
+                _model.text = cfg.aiModel;
+                _commit();
+              },
             ),
-          ),
-          Switch(
-            value: value,
-            onChanged: onChanged,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _miniSwitch(
-    String label,
-    bool value,
-    ValueChanged<bool> onChanged, {
-    String help = '',
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
+            const SizedBox(height: 12),
+            _field(
+              label: 'API Key',
+              controller: _apiKey,
+              obscureText: !_apiKeyVisible,
+              suffix: IconButton(
+                onPressed: () =>
+                    setState(() => _apiKeyVisible = !_apiKeyVisible),
+                icon: Icon(
+                  _apiKeyVisible
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
                 ),
-                if (help.isNotEmpty) _helpButton(help),
-              ],
+                tooltip: _apiKeyVisible ? '隐藏' : '显示',
+              ),
+              onChanged: (value) {
+                _commitApiKey(value);
+              },
             ),
-          ),
-          Switch(
-            value: value,
-            onChanged: onChanged,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _slider(
-    String label,
-    String help,
-    double value,
-    double min,
-    double max,
-    ValueChanged<double> onChanged,
-    String Function(double) format,
-  ) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        label,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Theme.of(context).colorScheme.onSurface,
-                        ),
-                      ),
-                    ),
-                    if (help.isNotEmpty) _helpButton(help),
-                  ],
-                ),
-              ),
-              Text(
-                format(value),
-                style: TextStyle(fontSize: 11.5, color: scheme.primary),
-              ),
-            ],
-          ),
-          Slider(
-            value: value.clamp(min, max),
-            min: min,
-            max: max,
-            onChanged: (v) {
-              setState(() {});
-              onChanged(v);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _helpButton(String message) {
-    return SizedBox(
-      width: 28,
-      height: 28,
-      child: IconButton(
-        padding: EdgeInsets.zero,
-        iconSize: 15,
-        tooltip: message,
-        visualDensity: VisualDensity.compact,
-        icon: Icon(
-          Icons.help_outline_rounded,
-          color: Theme.of(context).colorScheme.outline,
-        ),
-        onPressed: () => showDialog<void>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('\u8bbe\u7f6e\u8bf4\u660e'),
-            content: Text(message),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('\u77e5\u9053\u4e86'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _textField(
-    String label,
-    TextEditingController controller,
-    ValueChanged<String> onChanged, {
-    String hint = '',
-    String help = '',
-    int maxLines = 1,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                ),
-              ),
-              if (help.isNotEmpty)
-                Tooltip(
-                  message: help,
-                  child: Icon(
-                    Icons.help_outline_rounded,
-                    size: 15,
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          TextField(
-            controller: controller,
-            maxLines: maxLines,
-            style: TextStyle(
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurface,
+            const SizedBox(height: 8),
+            _InfoBanner(
+              icon: Icons.key_rounded,
+              text: 'API Key 保存在系统安全存储中，不再写入 config.json。',
+              color: Theme.of(context).colorScheme.primary,
             ),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: hint,
-              hintStyle: TextStyle(
-                fontSize: 10.5,
-                color: Theme.of(context).colorScheme.outline,
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 8,
-              ),
-              filled: true,
-              fillColor: Theme.of(context).colorScheme.surfaceContainer,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: Theme.of(context).colorScheme.outlineVariant,
-                ),
-              ),
-            ),
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _note(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 10.5,
-          height: 1.4,
-          color: Theme.of(context).colorScheme.outline,
-        ),
-      ),
-    );
-  }
-}
-
-class _ConnectionPage extends StatefulWidget {
-  const _ConnectionPage({required this.config});
-
-  final PetConfig config;
-
-  @override
-  State<_ConnectionPage> createState() => _ConnectionPageState();
-}
-
-class _ConnectionPageState extends State<_ConnectionPage> {
-  PetConfig get cfg => widget.config;
-  late String _mode;
-  late final TextEditingController _key;
-  late final TextEditingController _baseUrl;
-  late final TextEditingController _model;
-  bool _showKey = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _mode = cfg.aiAuthMode;
-    _key = TextEditingController(text: cfg.aiApiKey);
-    _baseUrl = TextEditingController(text: cfg.aiBaseUrl);
-    _model = TextEditingController(text: cfg.aiModel);
-  }
-
-  @override
-  void dispose() {
-    _key.dispose();
-    _baseUrl.dispose();
-    _model.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    cfg.aiAuthMode = _mode;
-    cfg.aiApiKey = _key.text.trim();
-    cfg.aiBaseUrl = _baseUrl.text.trim();
-    cfg.aiModel = _model.text.trim();
-    cfg.save();
-    PetLog.i('settings: conversation connection saved mode=$_mode');
-    const WindowMethodChannel(
-      'pet',
-      mode: ChannelMode.unidirectional,
-    ).invokeMethod('config-changed');
-  }
-
-  void _setMode(String? value) {
-    if (value == null) return;
-    setState(() {
-      _mode = value;
-      if (value == 'openai_api_key') {
-        _baseUrl.text = 'https://api.openai.com/v1';
-        if (_model.text.isEmpty || _model.text == 'deepseek-chat') {
-          _model.text = 'gpt-5.6-luna';
-        }
-      } else if (value == 'deepseek_api_key') {
-        _baseUrl.text = 'https://api.deepseek.com/v1';
-        if (_model.text.isEmpty || _model.text.startsWith('gpt-')) {
-          _model.text = 'deepseek-chat';
-        }
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isCustom = _mode == 'custom';
-    final isCodex = _mode == 'codex_login';
-    return Scaffold(
-      appBar: AppBar(title: const Text('对话接入方式')),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          DropdownButtonFormField<String>(
-            initialValue: _mode,
-            decoration: const InputDecoration(
-              labelText: '使用方式',
-              helperText: '选择 TimePet 如何访问对话模型。',
-            ),
-            items: const [
-              DropdownMenuItem(
-                value: 'openai_api_key',
-                child: Text('OpenAI API Key'),
-              ),
-              DropdownMenuItem(
-                value: 'deepseek_api_key',
-                child: Text('DeepSeek API Key'),
-              ),
-              DropdownMenuItem(value: 'custom', child: Text('自定义兼容接口')),
-              DropdownMenuItem(
-                value: 'codex_login',
-                child: Text('ChatGPT / Codex 登录'),
-              ),
-            ],
-            onChanged: _setMode,
-          ),
-          const SizedBox(height: 18),
-          if (isCodex)
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(14),
-                child: Text(
-                  '当前 Codex 的 ChatGPT 登录不能直接作为 TimePet 的 API 凭据。\n'
-                  '请使用 OpenAI API Key，或选择 DeepSeek API Key。',
-                ),
-              ),
-            ),
-          if (!isCodex) ...[
-            TextField(
-              controller: _key,
-              obscureText: !_showKey,
-              decoration: InputDecoration(
-                labelText: 'API Key',
-                hintText: '粘贴后仅显示掩码',
-                suffixIcon: IconButton(
-                  onPressed: () => setState(() => _showKey = !_showKey),
-                  icon: Icon(
-                    _showKey ? Icons.visibility_off : Icons.visibility,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            TextField(
+            const SizedBox(height: 12),
+            _field(
+              label: 'Base URL',
               controller: _baseUrl,
-              readOnly: !isCustom,
-              decoration: const InputDecoration(
-                labelText: '接口地址',
-                helperText: 'OpenAI/DeepSeek 会自动填写；兼容接口可手动修改。',
-              ),
+              onChanged: (value) {
+                cfg.aiBaseUrl = value.trim();
+                _commit();
+              },
             ),
-            const SizedBox(height: 14),
-            TextField(
+            const SizedBox(height: 12),
+            _field(
+              label: '模型名称',
               controller: _model,
-              decoration: const InputDecoration(
-                labelText: '模型名称',
-                helperText: '例如 gpt-5.6-luna 或 deepseek-chat。',
-              ),
+              onChanged: (value) {
+                cfg.aiModel = value.trim();
+                _commit();
+              },
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _sliderRow(
+                    '温度',
+                    cfg.aiTemperature,
+                    0,
+                    2,
+                    (v) {
+                      cfg.aiTemperature = v;
+                      _commit();
+                    },
+                    (v) => v.toStringAsFixed(1),
+                    showDivider: false,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _sliderRow(
+                    '回复上限',
+                    cfg.aiMaxTokens.toDouble(),
+                    100,
+                    2000,
+                    (v) {
+                      cfg.aiMaxTokens = v.round();
+                      _commit();
+                    },
+                    (v) => '${v.round()} tokens',
+                    showDivider: false,
+                  ),
+                ),
+              ],
             ),
           ],
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: () {
-              _save();
-              Navigator.pop(context);
-            },
-            child: const Text('保存并应用'),
-          ),
-        ],
+        ),
       ),
-    );
-  }
-}
-
-class _MemoryPage extends StatefulWidget {
-  const _MemoryPage();
-
-  @override
-  State<_MemoryPage> createState() => _MemoryPageState();
-}
-
-class _MemoryPageState extends State<_MemoryPage> {
-  @override
-  Widget build(BuildContext context) {
-    final rows = PetMemory.instance.recentMemoryRows(limit: 100);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('长期记忆'),
-        actions: [
-          IconButton(
-            tooltip: '清空全部记忆',
-            icon: const Icon(Icons.delete_sweep_outlined),
-            onPressed: rows.isEmpty
-                ? null
-                : () async {
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('清空长期记忆？'),
-                        content: const Text(
-                          '只会删除已提取的长期记忆，不会删除聊天记录或 TimeTrace 数据。',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: const Text('取消'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            child: const Text('清空'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (ok == true) {
-                      PetDb.instance.clearMemories();
-                      setState(() {});
-                    }
-                  },
-          ),
-        ],
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '人格设定',
+        subtitle: '留空时使用原创 Amadeus 默认人格；自定义内容不会随仓库或安装包分发。',
+        child: Column(
+          children: [
+            _field(
+              label: 'soul.md 路径（可选）',
+              controller: _soulFile,
+              onChanged: (value) {
+                cfg.soulFile = value.trim();
+                _commit();
+              },
+            ),
+            const SizedBox(height: 12),
+            _field(
+              label: '人格说明',
+              controller: _soulText,
+              maxLines: 7,
+              hint: '描述称呼、语气、边界与不希望发生的行为…',
+              onChanged: (value) {
+                cfg.soulText = value;
+                _commit();
+              },
+            ),
+            const SizedBox(height: 12),
+            _InfoBanner(
+              icon: Icons.copyright_outlined,
+              text: '使用第三方角色设定时，请确认你拥有相应使用权；个人本地使用权不自动包含公开发布或商业使用。',
+              color: Theme.of(context).colorScheme.secondary,
+            ),
+          ],
+        ),
       ),
-      body: rows.isEmpty
-          ? const Center(
-              child: Text(
-                '暂无已审核记忆\n完成几次对话后，这里会显示稳定的偏好、目标和事实。',
-                textAlign: TextAlign.center,
+    ],
+  );
+
+  Widget _privacy() => Column(
+    children: [
+      _SettingsCard(
+        title: '数据边界',
+        subtitle: '在线请求只包含对话所需的文本语料。',
+        child: const Column(
+          children: [
+            _ArchitectureRow(
+              icon: Icons.visibility_off_outlined,
+              title: '不会采集',
+              body: '窗口标题、截图、音频、键盘内容、文件路径与浏览历史',
+              badge: 'Not collected',
+            ),
+            Divider(height: 24),
+            _ArchitectureRow(
+              icon: Icons.lock_outline_rounded,
+              title: '只留在本机',
+              body: '模型资源、API Key、活动原始事件、数据库与长期记忆',
+              badge: 'Local only',
+            ),
+            Divider(height: 24),
+            _ArchitectureRow(
+              icon: Icons.cloud_outlined,
+              title: '发送到所选 AI 服务',
+              body: '你的消息、必要的近期对话，以及可选的活动聚合摘要',
+              badge: '可控',
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '本地记忆',
+        subtitle:
+            '${_memoryCount()} 条长期记忆 · ${_pendingMemoryCount()} 条待确认 · ${PetDb.instance.path}',
+        trailing: Wrap(
+          spacing: 4,
+          children: [
+            if (_pendingMemoryCount() > 0)
+              FilledButton.tonalIcon(
+                onPressed: () => _openMemoryManager(showPending: true),
+                icon: const Icon(Icons.fact_check_outlined, size: 18),
+                label: Text('审核 ${_pendingMemoryCount()}'),
               ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: rows.length,
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (context, index) {
-                final row = rows[index];
+            TextButton.icon(
+              onPressed: _memoryCount() == 0
+                  ? null
+                  : () => _openMemoryManager(),
+              icon: const Icon(Icons.tune_rounded, size: 18),
+              label: const Text('管理'),
+            ),
+            IconButton(
+              onPressed: _memoryCount() == 0 && _pendingMemoryCount() == 0
+                  ? null
+                  : _confirmClearMemories,
+              icon: const Icon(Icons.delete_outline_rounded, size: 18),
+              tooltip: '清除长期记忆与候选',
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_pendingMemoryCount() > 0) ...[
+              _InfoBanner(
+                icon: Icons.pending_actions_outlined,
+                text:
+                    'Amadeus 提出了 ${_pendingMemoryCount()} 条候选。批准前不会进入长期记忆、参与召回或触发主动对话。',
+                color: Theme.of(context).colorScheme.secondary,
+              ),
+              const SizedBox(height: 14),
+            ],
+            const Text('允许提出候选的类型'),
+            const SizedBox(height: 8),
+            _memoryCategoryControls(),
+            const Divider(height: 28),
+            _memoryPreview(),
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      _SettingsCard(
+        title: '系统行为',
+        child: Column(
+          children: [
+            _switchRow('桌宠始终置顶', '设置窗口不受此项影响。', cfg.alwaysOnTop, (v) {
+              cfg.alwaysOnTop = v;
+              _commit();
+            }),
+            _switchRow('窗口适应模型', '按实际绘制区域收紧透明窗口。', cfg.autoFitWindow, (v) {
+              cfg.autoFitWindow = v;
+              _commit();
+            }),
+            _switchRow('启动时显示', '关闭后从系统托盘唤出。', cfg.startVisible, (v) {
+              cfg.startVisible = v;
+              _commit();
+            }),
+            _switchRow('记录诊断日志', '日志只保存在用户数据目录。', cfg.logEnabled, (v) {
+              cfg.logEnabled = v;
+              _commit();
+            }, showDivider: false),
+          ],
+        ),
+      ),
+      const SizedBox(height: 18),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: _confirmReset,
+          icon: const Icon(Icons.restore_rounded, size: 18),
+          label: const Text('恢复默认设置'),
+        ),
+      ),
+    ],
+  );
+
+  String get _providerValue => switch (cfg.aiAuthMode) {
+    'openai_api_key' || 'deepseek_api_key' || 'custom' => cfg.aiAuthMode,
+    _ => 'custom',
+  };
+
+  int _memoryCount() {
+    try {
+      if (!PetDb.instance.initialized) return 0;
+      return PetMemory.instance.memoryCount();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  int _pendingMemoryCount() {
+    try {
+      if (!PetDb.instance.initialized) return 0;
+      return PetMemory.instance.pendingMemoryCount();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Widget _proactiveAudit() {
+    try {
+      final runtime = PetDb.instance.agentState();
+      final events = PetDb.instance.recentProactiveEvents(limit: 4);
+      final state = runtime?['state']?.toString() ?? 'unknown';
+      final stateLabel = switch (state) {
+        'observing' => '观察中',
+        'thinking' => '准备主动互动',
+        'speaking' => '对话中',
+        'sleeping' => '休眠中',
+        'paused' => '已暂停',
+        _ => '等待桌宠启动',
+      };
+      return Column(
+        children: [
+          _ArchitectureRow(
+            icon: state == 'sleeping'
+                ? Icons.bedtime_outlined
+                : Icons.radio_button_checked_rounded,
+            title: 'Agent $stateLabel',
+            body: runtime?['detail']?.toString() ?? '启动桌宠后显示实时状态',
+            badge: '本机状态',
+          ),
+          if (events.isNotEmpty) const Divider(height: 24),
+          for (var index = 0; index < events.length; index++) ...[
+            Builder(
+              builder: (context) {
+                final delivered = events[index]['state'] == 'fired';
                 return ListTile(
-                  contentPadding: const EdgeInsets.symmetric(vertical: 6),
-                  title: Text(row['content']?.toString() ?? ''),
-                  subtitle: Text(
-                    '${row['category'] ?? '事实'} · 重要性 ${row['importance'] ?? 1} · 来源 ${row['source'] ?? '对话审核'}',
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: Icon(
+                    delivered
+                        ? Icons.bolt_rounded
+                        : Icons.error_outline_rounded,
+                    size: 18,
+                    color: delivered
+                        ? null
+                        : Theme.of(context).colorScheme.error,
                   ),
-                  trailing: IconButton(
-                    tooltip: '删除记忆',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () {
-                      final id = row['id'];
-                      if (id is int) {
-                        PetDb.instance.deleteMemory(id);
-                        setState(() {});
-                      }
-                    },
+                  title: Text('${events[index]['label']}'),
+                  subtitle: Text(
+                    '${events[index]['reason']}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(delivered ? '已展示' : '未展示'),
+                      Text(_shortTime('${events[index]['ts']}')),
+                    ],
                   ),
                 );
               },
             ),
+            if (index < events.length - 1) const Divider(height: 1),
+          ],
+          if (events.isEmpty)
+            const _EmptyState(
+              icon: Icons.bolt_outlined,
+              title: '还没有主动互动记录',
+              body: '触发发生后，这里会说明是整点、久坐、记忆关心还是其他条件。',
+            ),
+        ],
+      );
+    } catch (_) {
+      return const _EmptyState(
+        icon: Icons.bolt_outlined,
+        title: '等待运行记录',
+        body: '启动桌宠后会在本机记录主动互动原因。',
+      );
+    }
+  }
+
+  String _shortTime(String raw) {
+    final value = DateTime.tryParse(raw)?.toLocal();
+    if (value == null) return '';
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '${value.month}/${value.day} $hour:$minute';
+  }
+
+  Widget _memoryCategoryControls() {
+    const labels = {
+      'preference': '偏好',
+      'habit': '习惯',
+      'goal': '目标',
+      'fact': '事实',
+      'event': '事件',
+      'relationship': '关系',
+    };
+    final disabled = cfg.memoryDisabledCategories.toSet();
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final entry in labels.entries)
+          FilterChip(
+            selected: !disabled.contains(entry.key),
+            label: Text(entry.value),
+            onSelected: (allowed) {
+              final next = cfg.memoryDisabledCategories.toSet();
+              allowed ? next.remove(entry.key) : next.add(entry.key);
+              cfg.memoryDisabledCategories = next.toList(growable: false);
+              _commit();
+              setState(() {});
+            },
+          ),
+      ],
+    );
+  }
+
+  Future<void> _confirmClearActivity() async {
+    final range = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('清理活动时间线'),
+        children: [
+          for (final option in const [
+            ('10m', '最近 10 分钟'),
+            ('1h', '最近 1 小时'),
+            ('1d', '最近 1 天'),
+            ('all', '全部活动历史'),
+          ])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, option.$1),
+              child: Text(option.$2),
+            ),
+        ],
+      ),
+    );
+    if (range == null) return;
+    final now = DateTime.now();
+    final since = switch (range) {
+      '10m' => now.subtract(const Duration(minutes: 10)),
+      '1h' => now.subtract(const Duration(hours: 1)),
+      '1d' => now.subtract(const Duration(days: 1)),
+      _ => null,
+    };
+    (widget.activityHistory ?? ActivityHistory.instance).clearSince(since);
+    if (mounted) setState(() {});
+  }
+
+  Widget _memoryPreview() {
+    try {
+      final rows = PetMemory.instance.recentMemoryRows(limit: 4);
+      if (rows.isEmpty) {
+        return const _EmptyState(
+          icon: Icons.memory_outlined,
+          title: '还没有长期记忆',
+          body: 'Amadeus 只会保存未来有帮助的稳定偏好、目标或重要事件。',
+        );
+      }
+      return Column(
+        children: [
+          for (var i = 0; i < rows.length; i++) ...[
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.circle, size: 8),
+              title: Text(
+                '${rows[i]['content']}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                '${rows[i]['category']} · 重要度 ${rows[i]['importance']}',
+              ),
+            ),
+            if (i < rows.length - 1) const Divider(height: 1),
+          ],
+        ],
+      );
+    } catch (_) {
+      return const _EmptyState(
+        icon: Icons.memory_outlined,
+        title: '记忆库尚未初始化',
+        body: '启动桌宠后会自动创建本地记忆库。',
+      );
+    }
+  }
+
+  Future<void> _openMemoryManager({bool showPending = false}) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => DefaultTabController(
+        length: 2,
+        initialIndex: showPending ? 0 : 1,
+        child: StatefulBuilder(
+          builder: (context, refreshDialog) {
+            final pending = PetMemory.instance.recentMemoryCandidates(
+              limit: 200,
+            );
+            final remembered = PetDb.instance.recentMemoryRows(limit: 200);
+            return Dialog(
+              child: SizedBox(
+                width: 720,
+                height: 590,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(22, 18, 12, 10),
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '记忆中心',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                SizedBox(height: 4),
+                                Text('候选只有在你批准后，才会成为可召回的长期记忆。'),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            icon: const Icon(Icons.close_rounded),
+                            tooltip: '关闭',
+                          ),
+                        ],
+                      ),
+                    ),
+                    TabBar(
+                      tabs: [
+                        Tab(text: '待确认 ${pending.length}'),
+                        Tab(text: '已记住 ${remembered.length}'),
+                      ],
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: TabBarView(
+                        children: [
+                          pending.isEmpty
+                              ? const Center(child: Text('没有待确认的记忆候选'))
+                              : ListView.separated(
+                                  padding: const EdgeInsets.all(14),
+                                  itemCount: pending.length,
+                                  separatorBuilder: (_, _) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final row = pending[index];
+                                    return ListTile(
+                                      leading: const Icon(
+                                        Icons.pending_actions_outlined,
+                                      ),
+                                      title: Text('${row['content']}'),
+                                      subtitle: Text(
+                                        '${row['category']} · 重要度 ${row['importance']} · ${_shortTime('${row['ts']}')}',
+                                      ),
+                                      trailing: Wrap(
+                                        spacing: 4,
+                                        children: [
+                                          IconButton(
+                                            onPressed: () {
+                                              PetMemory.instance
+                                                  .rejectMemoryCandidate(
+                                                    row['id'] as int,
+                                                  );
+                                              refreshDialog(() {});
+                                              if (mounted) setState(() {});
+                                            },
+                                            icon: const Icon(
+                                              Icons.close_rounded,
+                                            ),
+                                            tooltip: '不记住',
+                                          ),
+                                          FilledButton.tonalIcon(
+                                            onPressed: () {
+                                              PetMemory.instance
+                                                  .approveMemoryCandidate(
+                                                    row['id'] as int,
+                                                  );
+                                              refreshDialog(() {});
+                                              if (mounted) setState(() {});
+                                            },
+                                            icon: const Icon(
+                                              Icons.check_rounded,
+                                              size: 18,
+                                            ),
+                                            label: const Text('批准'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                          remembered.isEmpty
+                              ? const Center(child: Text('没有长期记忆'))
+                              : ListView.separated(
+                                  padding: const EdgeInsets.all(14),
+                                  itemCount: remembered.length,
+                                  separatorBuilder: (_, _) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final row = remembered[index];
+                                    return ListTile(
+                                      title: Text('${row['content']}'),
+                                      subtitle: Text(
+                                        '${row['category']} · 重要度 ${row['importance']} · ${_shortTime('${row['ts']}')}',
+                                      ),
+                                      onTap: () async {
+                                        await _editMemory(row);
+                                        refreshDialog(() {});
+                                        if (mounted) setState(() {});
+                                      },
+                                      trailing: IconButton(
+                                        onPressed: () {
+                                          PetDb.instance.deleteMemory(
+                                            row['id'] as int,
+                                          );
+                                          refreshDialog(() {});
+                                          if (mounted) setState(() {});
+                                        },
+                                        icon: const Icon(
+                                          Icons.delete_outline_rounded,
+                                        ),
+                                        tooltip: '删除',
+                                      ),
+                                    );
+                                  },
+                                ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editMemory(Map<String, Object?> row) async {
+    const categories = [
+      'preference',
+      'habit',
+      'goal',
+      'fact',
+      'event',
+      'relationship',
+    ];
+    final controller = TextEditingController(text: '${row['content']}');
+    var category = '${row['category']}';
+    if (!categories.contains(category)) category = 'fact';
+    var importance = (row['importance'] as int? ?? 1).clamp(1, 5);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, refresh) => AlertDialog(
+          title: const Text('编辑记忆'),
+          content: SizedBox(
+            width: 500,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controller,
+                  maxLines: 4,
+                  decoration: const InputDecoration(labelText: '内容'),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<String>(
+                  initialValue: category,
+                  decoration: const InputDecoration(labelText: '类型'),
+                  items: [
+                    for (final item in categories)
+                      DropdownMenuItem(value: item, child: Text(item)),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) refresh(() => category = value);
+                  },
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    const Text('重要度'),
+                    Expanded(
+                      child: Slider(
+                        value: importance.toDouble(),
+                        min: 1,
+                        max: 5,
+                        divisions: 4,
+                        label: '$importance',
+                        onChanged: (value) =>
+                            refresh(() => importance = value.round()),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && controller.text.trim().isNotEmpty) {
+      PetDb.instance.updateMemory(
+        row['id'] as int,
+        content: controller.text,
+        category: category,
+        importance: importance,
+      );
+    }
+    controller.dispose();
+  }
+
+  Future<void> _confirmClearMemories() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清除本地记忆？'),
+        content: const Text('这会删除已批准的长期记忆和待确认候选。近期对话与活动时间线不受影响。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认清除'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      PetDb.instance.clearMemories();
+      setState(() {});
+    }
+  }
+
+  Future<void> _confirmReset() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('恢复默认设置？'),
+        content: const Text('模型路径、人格内容和 AI 连接信息也会被清除。本地记忆不会删除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('恢复默认'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      _commitTimer?.cancel();
+      _secretCommitTimer?.cancel();
+      await PetSecretStore.instance.clearApiKey(cfg);
+      cfg.resetToDefaults();
+      _syncControllers();
+      _saveNow();
+    }
+  }
+
+  Widget _field({
+    required String label,
+    required TextEditingController controller,
+    required ValueChanged<String> onChanged,
+    String? hint,
+    bool obscureText = false,
+    Widget? suffix,
+    int maxLines = 1,
+  }) => TextField(
+    controller: controller,
+    obscureText: obscureText,
+    maxLines: obscureText ? 1 : maxLines,
+    onChanged: onChanged,
+    decoration: InputDecoration(
+      labelText: label,
+      hintText: hint,
+      suffixIcon: suffix,
+      alignLabelWithHint: maxLines > 1,
+    ),
+  );
+
+  Widget _switchRow(
+    String title,
+    String detail,
+    bool value,
+    ValueChanged<bool>? onChanged, {
+    bool showDivider = true,
+  }) => Column(
+    children: [
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
+        subtitle: Text(detail),
+        value: value,
+        onChanged: onChanged,
+      ),
+      if (showDivider) const Divider(height: 1),
+    ],
+  );
+
+  Widget _sliderRow(
+    String title,
+    double value,
+    double min,
+    double max,
+    ValueChanged<double> onChanged,
+    String Function(double) format, {
+    bool showDivider = true,
+  }) {
+    final safe = value.clamp(min, max).toDouble();
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 13),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                  Text(
+                    format(safe),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+              Slider(value: safe, min: min, max: max, onChanged: onChanged),
+            ],
+          ),
+        ),
+        if (showDivider) const Divider(height: 1),
+      ],
+    );
+  }
+
+  Widget _triggerChip(
+    String label,
+    IconData icon,
+    bool selected,
+    ValueChanged<bool> update,
+  ) => FilterChip(
+    selected: selected,
+    avatar: Icon(icon, size: 17),
+    label: Text(label),
+    onSelected: (value) {
+      update(value);
+      _commit();
+    },
+  );
+
+  Widget _triggerGroup({
+    required String title,
+    required String detail,
+    required List<Widget> children,
+  }) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      const SizedBox(height: 3),
+      Text(
+        detail,
+        style: TextStyle(
+          fontSize: 12,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+      const SizedBox(height: 10),
+      Wrap(spacing: 10, runSpacing: 10, children: children),
+    ],
+  );
+}
+
+class _NavTile extends StatelessWidget {
+  const _NavTile({
+    required this.selected,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.compact = false,
+  });
+
+  final bool selected;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tile = Material(
+      color: selected
+          ? scheme.primary.withValues(alpha: 0.12)
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 10 : 12,
+            vertical: 11,
+          ),
+          child: Row(
+            mainAxisAlignment: compact
+                ? MainAxisAlignment.center
+                : MainAxisAlignment.start,
+            children: [
+              Icon(
+                icon,
+                size: 19,
+                color: selected ? scheme.primary : scheme.onSurfaceVariant,
+              ),
+              if (!compact) ...[
+                const SizedBox(width: 11),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected
+                        ? scheme.onSurface
+                        : scheme.onSurfaceVariant,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+    return compact ? Tooltip(message: label, child: tile) : tile;
+  }
+}
+
+class _SettingsCard extends StatelessWidget {
+  const _SettingsCard({
+    required this.title,
+    required this.child,
+    this.subtitle,
+    this.trailing,
+  });
+
+  final String title;
+  final String? subtitle;
+  final Widget child;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          height: 1.45,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+            ],
+          ),
+          const SizedBox(height: 18),
+          child,
+        ],
+      ),
+    ),
+  );
+}
+
+class _OverviewCard extends StatelessWidget {
+  const _OverviewCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.detail,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final String detail;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: color, size: 21),
+                  const Spacer(),
+                  Icon(
+                    Icons.arrow_forward_rounded,
+                    color: scheme.outline,
+                    size: 17,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+              Text(
+                title,
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                value,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                detail,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: scheme.onSurfaceVariant,
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
 
-class _SoulPage extends StatefulWidget {
-  const _SoulPage({required this.initial});
-  final String initial;
+class _ArchitectureRow extends StatelessWidget {
+  const _ArchitectureRow({
+    required this.icon,
+    required this.title,
+    required this.body,
+    required this.badge,
+  });
 
-  @override
-  State<_SoulPage> createState() => _SoulPageState();
-}
-
-class _SoulPageState extends State<_SoulPage> {
-  late final TextEditingController _controller = TextEditingController(
-    text: widget.initial,
-  );
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final cfg = PetConfig.instance;
-    cfg.soulText = _controller.text.length > 32000
-        ? _controller.text.substring(0, 32000)
-        : _controller.text;
-    cfg.save();
-    try {
-      const WindowMethodChannel(
-        'pet',
-        mode: ChannelMode.unidirectional,
-      ).invokeMethod('config-changed');
-    } catch (_) {}
-    Navigator.of(context).pop();
-  }
+  final IconData icon;
+  final String title;
+  final String body;
+  final String badge;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('编辑人格'),
-        actions: [TextButton(onPressed: _save, child: const Text('保存'))],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: TextField(
-          controller: _controller,
-          autofocus: true,
-          expands: true,
-          maxLines: null,
-          textAlignVertical: TextAlignVertical.top,
-          decoration: const InputDecoration(
-            hintText: '直接粘贴或编辑人格设定。留空会恢复默认人格。',
-            border: OutlineInputBorder(),
-            alignLabelWithHint: true,
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Icon(icon, color: scheme.primary, size: 21),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 3),
+              Text(
+                body,
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+              ),
+            ],
           ),
+        ),
+        const SizedBox(width: 12),
+        _StatusPill(color: scheme.secondary, text: badge),
+      ],
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.color, required this.text});
+
+  final Color color;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: color.withValues(alpha: 0.22)),
+    ),
+    child: Text(
+      text,
+      style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+    ),
+  );
+}
+
+class _InfoBanner extends StatelessWidget {
+  const _InfoBanner({
+    required this.icon,
+    required this.text,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(13),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.09),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: color.withValues(alpha: 0.2)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(text, style: const TextStyle(fontSize: 13, height: 1.45)),
+        ),
+      ],
+    ),
+  );
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Center(
+        child: Column(
+          children: [
+            Icon(icon, color: scheme.outline, size: 28),
+            const SizedBox(height: 10),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Text(
+              body,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+            ),
+          ],
         ),
       ),
     );

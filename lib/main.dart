@@ -1,18 +1,45 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart' as acrylic;
 
 import 'app.dart';
+import 'services/pet_config.dart';
 import 'services/pet_logger.dart';
+import 'services/pet_secret_store.dart';
 import 'services/pet_window.dart';
 import 'ui/settings_window.dart';
+import 'ui/acceptance_demo.dart';
 
-void main() async {
+void main(List<String> args) async {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+      final acceptanceDemo =
+          args.contains('--acceptance-demo') ||
+          Platform.environment['AMADEUS_ACCEPTANCE_DEMO'] == '1';
+      if (acceptanceDemo) {
+        // Keep release acceptance hermetic: do not initialize the normal
+        // logger, config, secrets, tray, or multi-window services.
+        FlutterError.onError = FlutterError.presentError;
+        final platformName = Platform.environment['AMADEUS_ACCEPTANCE_PLATFORM']
+            ?.toLowerCase();
+        final TargetPlatform? demoPlatform;
+        if (platformName == 'windows') {
+          demoPlatform = TargetPlatform.windows;
+        } else if (platformName == 'macos') {
+          demoPlatform = TargetPlatform.macOS;
+        } else if (platformName == 'linux') {
+          demoPlatform = TargetPlatform.linux;
+        } else {
+          demoPlatform = null;
+        }
+        runApp(AcceptanceDemoApp(targetPlatform: demoPlatform));
+        return;
+      }
+
       FlutterError.onError = (details) {
         PetLog.e('FlutterError: ${details.exception}\n${details.stack}');
       };
@@ -30,6 +57,9 @@ void main() async {
       }
       PetLog.i('main: windowId=$windowId args=$windowArgs');
 
+      PetConfig.instance.load();
+      await PetSecretStore.instance.hydrate(PetConfig.instance);
+
       if (windowArgs.contains('settings')) {
         // 设置窗口：普通不透明大窗口，独立运行
         runApp(
@@ -46,7 +76,7 @@ void main() async {
       await PetWindow.setup();
       PetLog.i('main: PetWindow.setup done');
 
-      runApp(const KurisuPetApp());
+      runApp(const AmadeusApp());
     },
     (error, stack) {
       PetLog.e('zone error: $error\n$stack');

@@ -23,6 +23,7 @@ class PetWindow {
 
   static final _winListener = _CloseToTrayListener();
   static final _trayListener = _TrayHandler();
+  static bool _trayReady = false;
 
   static Future<void> setup() async {
     await windowManager.ensureInitialized();
@@ -133,7 +134,20 @@ class PetWindow {
   static Future<void> setupTray() async {
     final iconPath = await _extractTrayIcon();
     await trayManager.setIcon(iconPath);
-    await trayManager.setToolTip('TimeTrace 助手 · 牧濑红莉栖');
+    if (!_trayReady) {
+      trayManager.addListener(_trayListener);
+      _trayReady = true;
+    }
+    await refreshTray();
+  }
+
+  static Future<void> refreshTray() async {
+    final cfg = PetConfig.instance;
+    final collecting =
+        cfg.activityAwarenessEnabled && !cfg.activityAwarenessPaused;
+    await trayManager.setToolTip(
+      collecting ? 'Amadeus · 活动感知中' : 'Amadeus · 活动感知已暂停',
+    );
     await trayManager.setContextMenu(
       Menu(
         items: [
@@ -141,18 +155,26 @@ class PetWindow {
           MenuItem(key: 'chat', label: '聊两句'),
           MenuItem(key: 'settings', label: '设置'),
           MenuItem.separator(),
+          if (cfg.activityAwarenessEnabled)
+            MenuItem(
+              key: 'toggle-awareness',
+              label: cfg.activityAwarenessPaused ? '恢复活动感知' : '暂停活动感知',
+            ),
+          if (cfg.activityAwarenessEnabled) MenuItem.separator(),
           MenuItem(key: 'quit', label: '退出'),
         ],
       ),
     );
-    trayManager.addListener(_trayListener);
   }
 
   static Future<String> _extractTrayIcon() async {
-    final data = await rootBundle.load('assets/tray/tray.ico');
-    final dir = Directory('${Directory.systemTemp.path}/timepet');
+    final usePng = Platform.isMacOS || Platform.isLinux;
+    final asset = usePng ? 'assets/tray/tray.png' : 'assets/tray/tray.ico';
+    final extension = usePng ? 'png' : 'ico';
+    final data = await rootBundle.load(asset);
+    final dir = Directory('${Directory.systemTemp.path}/amadeus');
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    final file = File('${dir.path}/tray.ico');
+    final file = File('${dir.path}/tray.$extension');
     await file.writeAsBytes(data.buffer.asUint8List());
     return file.path;
   }
@@ -210,6 +232,15 @@ class _TrayHandler extends TrayListener {
         break;
       case 'settings':
         PetWindow.onOpenSettings?.call();
+        break;
+      case 'toggle-awareness':
+        final cfg = PetConfig.instance;
+        cfg.activityAwarenessPaused = !cfg.activityAwarenessPaused;
+        cfg.save();
+        unawaited(PetWindow.refreshTray());
+        PetLog.i(
+          'activity: ${cfg.activityAwarenessPaused ? 'paused' : 'resumed'} from tray',
+        );
         break;
       case 'quit':
         windowManager.destroy();

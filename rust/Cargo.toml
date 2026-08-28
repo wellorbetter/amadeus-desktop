@@ -1,0 +1,15 @@
+[package]
+name = "amadeus_core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Privacy-first activity stream core for the Amadeus desktop agent"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[profile.release]
+lto = "thin"
+panic = "abort"
+strip = "symbols"
+

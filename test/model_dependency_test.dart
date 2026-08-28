@@ -8,15 +8,15 @@ void main() {
   test('model entry rejects a missing referenced dependency', () async {
     final root = await Directory.systemTemp.createTemp('timepet-model-');
     addTearDown(() => root.delete(recursive: true));
-    final model = File('${root.path}/kurisu.model.json');
+    final model = File('${root.path}/avatar.model.json');
     await model.writeAsString('''
 {
-  "model": "kurisu.moc",
+  "model": "avatar.moc",
   "textures": ["textures/texture_00.png"],
-  "physics": "kurisu.physics.json"
+  "physics": "avatar.physics.json"
 }
 ''');
-    await File('${root.path}/kurisu.moc').writeAsBytes([1]);
+    await File('${root.path}/avatar.moc').writeAsBytes([1]);
 
     await expectLater(
       PetModel.importFromFile(model.path, targetRoot: '${root.path}/installed'),
@@ -29,15 +29,15 @@ void main() {
     () async {
       final root = await Directory.systemTemp.createTemp('timepet-package-');
       addTearDown(() => root.delete(recursive: true));
-      final package = Directory('${root.path}/kurisu');
+      final package = Directory('${root.path}/avatar');
       await package.create();
-      await File('${package.path}/kurisu.model.json').writeAsString(
+      await File('${package.path}/avatar.model.json').writeAsString(
         jsonEncode({
-          'model': 'shizuku.moc',
+          'model': 'avatar.moc',
           'textures': ['texture_00.png'],
         }),
       );
-      await File('${package.path}/shizuku.moc').writeAsString('moc');
+      await File('${package.path}/avatar.moc').writeAsString('moc');
       await File('${package.path}/texture_00.png').writeAsBytes([1, 2, 3]);
 
       final result = await PetModel.importPackage(
@@ -49,7 +49,7 @@ void main() {
       expect(result.files, 3);
       expect(File(result.path).existsSync(), isTrue);
       expect(
-        File('${root.path}/installed/kurisu/texture_00.png').existsSync(),
+        File('${root.path}/installed/avatar/texture_00.png').existsSync(),
         isTrue,
       );
     },

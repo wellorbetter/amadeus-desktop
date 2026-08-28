@@ -1,0 +1,147 @@
+name: Flutter desktop
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flutter-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Analyze and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Verify Rust formatting
+        run: cargo fmt --manifest-path rust/Cargo.toml -- --check
+      - name: Test Rust activity core
+        run: cargo test --manifest-path rust/Cargo.toml
+      - name: Lint Rust activity core
+        run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze
+      - run: flutter test
+
+  windows:
+    name: Build Windows
+    needs: quality
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: Smoke full Windows release
+        shell: pwsh
+        run: ./tools/acceptance/smoke_windows.ps1 -AppPath build/windows/x64/runner/Release/timepet.exe
+      - name: Install FFmpeg for Windows acceptance video
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+      - name: Record Windows release acceptance tour
+        shell: pwsh
+        run: ./tools/acceptance/record_windows.ps1 -AppPath build/windows/x64/runner/Release/timepet.exe -OutputPath build/acceptance/amadeus-windows.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-windows
+          path: build/windows/x64/runner/Release/
+          if-no-files-found: error
+      - name: Upload Windows acceptance video
+        uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-windows-acceptance-video
+          path: build/acceptance/amadeus-windows.mp4
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS
+    needs: quality
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter config --enable-macos-desktop
+      - run: flutter pub get
+      - run: flutter build macos --release
+      - name: Attempt full macOS GUI process smoke
+        continue-on-error: true
+        run: ./tools/acceptance/smoke_macos.sh build/macos/Build/Products/Release/Amadeus.app
+      - name: Attempt macOS acceptance recording
+        continue-on-error: true
+        run: ./tools/acceptance/record_macos.sh build/macos/Build/Products/Release/Amadeus.app build/acceptance/amadeus-macos.mov
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-macos-unsigned
+          path: build/macos/Build/Products/Release/Amadeus.app/
+          if-no-files-found: error
+      - name: Upload macOS video when Screen Recording consent is available
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-macos-acceptance-video
+          path: build/acceptance/amadeus-macos.mov
+          if-no-files-found: warn
+
+  linux:
+    name: Build and record Ubuntu
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install Linux desktop and recording dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtk-3-dev libsecret-1-dev libayatana-appindicator3-dev libx11-dev libxss-dev xvfb openbox ffmpeg
+      - run: flutter config --enable-linux-desktop
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - name: Smoke full Ubuntu release
+        run: ./tools/acceptance/smoke_linux.sh build/linux/x64/release/bundle/amadeus
+      - name: Record Ubuntu release acceptance tour
+        run: ./tools/acceptance/record_linux.sh build/linux/x64/release/bundle/amadeus build/acceptance/amadeus-ubuntu.mp4
+      - name: Record macOS-semantics UI simulation
+        run: |
+          AMADEUS_ACCEPTANCE_PLATFORM=macos \
+          AMADEUS_DEMO_DISPLAY=:97 \
+          ./tools/acceptance/record_linux.sh build/linux/x64/release/bundle/amadeus build/acceptance/amadeus-macos-simulation.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-ubuntu
+          path: build/linux/x64/release/bundle/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-ubuntu-acceptance-video
+          path: build/acceptance/amadeus-ubuntu.mp4
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amadeus-macos-ui-simulation-video
+          path: build/acceptance/amadeus-macos-simulation.mp4
+          if-no-files-found: error

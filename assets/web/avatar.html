@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TimePet</title>
+<title>Amadeus</title>
 <style>
   html, body {
     margin: 0; padding: 0; width: 100%; height: 100%;
@@ -33,12 +33,13 @@
 (function () {
   "use strict";
 
-  // 模型地址由 Flutter 注入：kurisu.html?model=<文件名>，虚拟主机 model.local 映射到模型所在目录
+  // 模型地址由 Flutter 注入。Web assets and the user-selected model share
+  // one loopback-only origin on both WebView2 and WKWebView.
   var MODEL_JSON = null;
   (function () {
     try {
       var m = new URLSearchParams(location.search).get("model");
-      if (m) MODEL_JSON = "https://model.local/" + m;
+      if (m) MODEL_JSON = "/model/" + encodeURIComponent(m);
     } catch (_) {}
   })();
 
@@ -63,6 +64,8 @@
     try {
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage("[pet] " + msg);
+      } else if (window.AmadeusHost) {
+        window.AmadeusHost.postMessage("[pet] " + msg);
       }
     } catch (_) {}
   }
@@ -140,7 +143,7 @@
 
   // ---- 模型音效（动作自带的 mp3）----
   // 精简版 L2Dwidget 没有音频引擎，这里自行读取模型 motions 里的 sound 引用并播放：
-  // 拍头/点头等动作自带音效（如 kurisu 的 sounds/*.mp3），没有音效的模型则保持无声。
+  // 拍头/点头等动作可使用模型自身 motions 中的 sound 引用；无音效时保持静音。
   var soundMap = {}; // 动作组 -> [sound 相对路径]
   var soundBase = ""; // 模型 json 所在目录
   function loadSoundMap() {
@@ -412,6 +415,8 @@
     try {
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage("[pet] " + msg);
+      } else if (window.AmadeusHost) {
+        window.AmadeusHost.postMessage("[pet] " + msg);
       }
     } catch (_) {}
   }
@@ -612,7 +617,7 @@
 
   function boot() {
     if (!MODEL_JSON) {
-      showFallback("未检测到模型文件。\n请把 Cubism 2.1 的 Live2D 模型文件夹放到程序目录下的 models/ 中（如 models/我的角色/kurisu.model.json），\n然后在设置里填写模型路径或重启程序。");
+      showFallback("未检测到模型文件。\n请在初始向导或设置页中导入一个完整的 Cubism 2.1 Live2D 模型包。\n模型资源只会保存在本机。");
       return;
     }
     if (/\.model3\.json$/i.test(MODEL_JSON)) {
@@ -653,7 +658,7 @@
     },
     // 动态切换模型（Flutter 侧在模型路径变化时调用）
     setModel: function (file) {
-      var next = file ? "https://model.local/" + file : null;
+      var next = file ? file : null;
       if (next === MODEL_JSON) return true;
       MODEL_JSON = next;
       fitReported = false;

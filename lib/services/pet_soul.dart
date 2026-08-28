@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'pet_config.dart';
 import 'pet_logger.dart';
+import 'app_paths.dart';
 
 /// 人格插件：从外部 soul.md 加载角色设定（插件化人格，不写死在代码里）。
 ///
@@ -10,7 +11,7 @@ import 'pet_logger.dart';
 /// 2. `%APPDATA%/timepet/soul.md`
 /// 3. `<exe>/soul.md`
 ///
-/// 未找到时返回空文本，AI 使用内置默认人格（牧濑红莉栖）。
+/// 未找到时返回空文本，AI 使用原创的 Amadeus 默认人格。
 class PetSoul {
   PetSoul._();
 
@@ -37,7 +38,7 @@ class PetSoul {
     }
     final candidates = <String>[
       if (cfg.soulFile.trim().isNotEmpty) cfg.soulFile.trim(),
-      '${_appDataDir()}/timepet/soul.md',
+      AppPaths.soulFile.path,
       '${_exeDir()}/soul.md',
     ];
     for (final path in candidates) {
@@ -57,9 +58,6 @@ class PetSoul {
     _source = '';
     PetLog.i('soul: none found, use built-in persona');
   }
-
-  static String _appDataDir() =>
-      Platform.environment['APPDATA'] ?? Directory.systemTemp.path;
 
   static String _exeDir() => File(Platform.resolvedExecutable).parent.path;
 }

@@ -5,10 +5,18 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:timepet/services/ai_chat.dart';
 
-Future<HttpServer> _server(String body, {bool stream = true}) async {
+Future<HttpServer> _server(
+  String body, {
+  bool stream = true,
+  void Function(Map<String, dynamic> payload)? onPayload,
+}) async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   unawaited(() async {
     await for (final request in server) {
+      final requestBody = await utf8.decoder.bind(request).join();
+      if (onPayload != null) {
+        onPayload(jsonDecode(requestBody) as Map<String, dynamic>);
+      }
       request.response.headers.contentType = stream
           ? ContentType('text', 'event-stream', charset: 'utf-8')
           : ContentType.json;
@@ -120,4 +128,43 @@ void main() {
     expect(chat.lastRequestCompleted, isFalse);
     expect(chat.lastCompletionReason, 'malformed_event');
   });
+
+  test(
+    'visible chat and internal generation never retain hidden history',
+    () async {
+      final payloads = <Map<String, dynamic>>[];
+      final server = await _server(
+        'ok',
+        stream: false,
+        onPayload: payloads.add,
+      );
+      addTearDown(server.close);
+      final chat = AiChat(
+        apiKey: 'test',
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        model: 'gpt-test',
+      );
+
+      await chat.chat('first visible turn', systemPrompt: 'context one');
+      await chat.generate(
+        'internal trigger directive',
+        systemPrompt: 'context two',
+      );
+      await chat.chat('second visible turn', systemPrompt: 'context three');
+
+      expect(payloads, hasLength(3));
+      final lastMessages = payloads.last['messages'] as List<dynamic>;
+      expect(lastMessages, hasLength(2));
+      expect(lastMessages[0], {'role': 'system', 'content': 'context three'});
+      expect(lastMessages[1], {
+        'role': 'user',
+        'content': 'second visible turn',
+      });
+      expect(jsonEncode(payloads.last), isNot(contains('first visible turn')));
+      expect(
+        jsonEncode(payloads.last),
+        isNot(contains('internal trigger directive')),
+      );
+    },
+  );
 }

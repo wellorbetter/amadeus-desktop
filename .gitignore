@@ -12,6 +12,12 @@ windows/flutter/generated_plugin_registrant.cc
 windows/flutter/generated_plugin_registrant.h
 windows/flutter/generated_plugins.cmake
 
+# Linux runner generated
+linux/flutter/ephemeral/
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.h
+linux/flutter/generated_plugins.cmake
+
 # IDE
 .idea/
 *.iml
@@ -24,6 +30,9 @@ windows/flutter/generated_plugins.cmake
 # Python
 __pycache__/
 *.pyc
+
+# Rust
+/rust/target/
 
 # 模型资源不入库（版权：使用者自备）
 /models/
