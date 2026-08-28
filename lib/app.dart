@@ -397,7 +397,7 @@ class _PetHomeState extends State<PetHome> {
     const request =
         '早上好/晚上好，简单打个招呼就好，两三句话。可以自然地提到你观察到的用户状态'
         '（比如正在用什么、今天活跃了多久），但别生硬报数。';
-    final reply = await _ai.chat(
+    final reply = await _ai.generate(
       request,
       systemPrompt: _systemPromptFor(request),
       onDelta: (d) {
@@ -428,7 +428,7 @@ class _PetHomeState extends State<PetHome> {
     if (mounted) setState(() => _typing = true);
     PetLog.i('app: proactive prompt=$prompt');
     String accumulated = '';
-    final reply = await _ai.chat(
+    final reply = await _ai.generate(
       prompt,
       systemPrompt: _systemPromptFor(prompt),
       onDelta: (d) {
@@ -462,6 +462,10 @@ class _PetHomeState extends State<PetHome> {
     _triggers.userInteracted();
     PetLog.i('app: ask start len=${text.length}');
     PetDb.instance.setAgentState('speaking', '正在回复你的消息');
+    // Compose from prior visible turns, then persist this turn. This keeps the
+    // current user message from appearing both inside Working Memory and as the
+    // request's explicit user message.
+    final systemPrompt = _systemPromptFor(text);
     PetMemory.instance.record('user', text);
     _scheduleInputHide();
     setState(() {
@@ -480,7 +484,7 @@ class _PetHomeState extends State<PetHome> {
     String accumulated = '';
     final reply = await _ai.chat(
       text,
-      systemPrompt: _systemPromptFor(text),
+      systemPrompt: systemPrompt,
       onDelta: (d) {
         accumulated += d;
         _queueBubbleText(accumulated);
@@ -590,7 +594,8 @@ class _PetHomeState extends State<PetHome> {
     );
   }
 
-  /// 记忆审核：用户消息含稳定信息信号时，用 LLM 提取偏好/目标等写入长期记忆。
+  /// 记忆审核：用户消息含稳定信息信号时，用 LLM 提取偏好/目标等候选。
+  /// 候选只有在设置页由用户批准后才会写入长期记忆。
   Future<void> _auditMemory(String userText) async {
     if (!_aiActive || _sleeping) return;
     if (!PetMemory.instance.hasMemorySignal(userText)) return;
@@ -614,7 +619,7 @@ class _PetHomeState extends State<PetHome> {
     );
     final items = _parseMemoryJson(reply);
     if (items.isNotEmpty) {
-      PetMemory.instance.storeAudited(items);
+      PetMemory.instance.stageAudited(items);
     }
     PetLog.i('mem: audit done extracted=${items.length}');
   }

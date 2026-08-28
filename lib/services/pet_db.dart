@@ -18,7 +18,8 @@ class _NewerDatabaseSchema implements Exception {
 /// 本地 SQLite 记忆库（%APPDATA%/timepet/mem.db）。
 /// 分层记忆：
 /// - messages    工作记忆：最近对话（替换旧 mem.json entries）
-/// - memories    语义记忆：经审核的长期记忆（偏好/习惯/目标/事件）
+/// - memory_candidates 候选记忆：模型提出、用户尚未确认的稳定信息
+/// - memories    语义记忆：用户确认后的长期记忆（偏好/习惯/目标/事件）
 /// - key_value   元信息（迁移标记等）
 ///
 /// Computer History 始终留在短期 activity.db，不复制到长期记忆库。
@@ -29,7 +30,7 @@ class PetDb {
 
   static final PetDb instance = PetDb();
 
-  static const schemaVersion = 3;
+  static const schemaVersion = 4;
 
   final String? _pathOverride;
   final bool _migrateLegacy;
@@ -148,6 +149,20 @@ class PetDb {
     db.execute(
       'CREATE INDEX IF NOT EXISTS idx_memories_active '
       'ON memories(active, importance)',
+    );
+    db.execute(
+      'CREATE TABLE IF NOT EXISTS memory_candidates('
+      'id INTEGER PRIMARY KEY AUTOINCREMENT,'
+      'content TEXT NOT NULL,'
+      "category TEXT NOT NULL DEFAULT 'fact',"
+      'importance INTEGER NOT NULL DEFAULT 1,'
+      'ts TEXT NOT NULL,'
+      "source TEXT NOT NULL DEFAULT 'model-suggested',"
+      "status TEXT NOT NULL DEFAULT 'pending')",
+    );
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_memory_candidates_status '
+      'ON memory_candidates(status, id)',
     );
     db.execute(
       'CREATE TABLE IF NOT EXISTS key_value('
@@ -372,10 +387,148 @@ class PetDb {
   void clearMemories() {
     if (_db == null) return;
     try {
+      db.execute('BEGIN IMMEDIATE');
       db.execute('DELETE FROM memories');
-      PetLog.i('db: memories cleared');
+      db.execute('DELETE FROM memory_candidates');
+      db.execute('COMMIT');
+      PetLog.i('db: memories and candidates cleared');
     } catch (e) {
+      try {
+        db.execute('ROLLBACK');
+      } catch (_) {}
       PetLog.e('db: clearMemories error: $e');
+    }
+  }
+
+  // ---- 候选记忆：模型建议，用户确认后才可召回 ----
+
+  bool addMemoryCandidate(
+    String content, {
+    String category = 'fact',
+    int importance = 1,
+    String source = 'model-suggested',
+  }) {
+    final value = content.trim();
+    if (_db == null || value.isEmpty) return false;
+    try {
+      final remembered = db.select(
+        'SELECT 1 FROM memories WHERE active = 1 AND content = ? LIMIT 1',
+        [value],
+      );
+      if (remembered.isNotEmpty) return false;
+      // A rejected exact candidate remains a durable user decision and should
+      // not be suggested again on every similar conversation.
+      final existing = db.select(
+        'SELECT 1 FROM memory_candidates WHERE content = ? LIMIT 1',
+        [value],
+      );
+      if (existing.isNotEmpty) return false;
+      db.execute(
+        'INSERT INTO memory_candidates('
+        'content, category, importance, ts, source, status) '
+        "VALUES (?, ?, ?, ?, ?, 'pending')",
+        [
+          value,
+          category,
+          importance.clamp(1, 5),
+          DateTime.now().toIso8601String(),
+          source,
+        ],
+      );
+      return true;
+    } catch (e) {
+      PetLog.e('db: add memory candidate error: $e');
+      return false;
+    }
+  }
+
+  int pendingMemoryCount() {
+    if (_db == null) return 0;
+    final rows = db.select(
+      "SELECT COUNT(*) AS c FROM memory_candidates WHERE status = 'pending'",
+    );
+    return rows.first['c'] as int? ?? 0;
+  }
+
+  List<Map<String, Object?>> recentMemoryCandidates({int limit = 50}) {
+    if (_db == null) return const [];
+    return db
+        .select(
+          'SELECT id, content, category, importance, ts, source '
+          "FROM memory_candidates WHERE status = 'pending' "
+          'ORDER BY id DESC LIMIT ?',
+          [limit],
+        )
+        .map((row) => Map<String, Object?>.from(row))
+        .toList();
+  }
+
+  bool approveMemoryCandidate(int id) {
+    if (_db == null) return false;
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      final rows = db.select(
+        'SELECT content, category, importance FROM memory_candidates '
+        "WHERE id = ? AND status = 'pending' LIMIT 1",
+        [id],
+      );
+      if (rows.isEmpty) {
+        db.execute('ROLLBACK');
+        return false;
+      }
+      final row = rows.first;
+      final content = '${row['content']}';
+      final duplicate = db.select(
+        'SELECT 1 FROM memories WHERE active = 1 AND content = ? LIMIT 1',
+        [content],
+      );
+      if (duplicate.isEmpty) {
+        db.execute(
+          'INSERT INTO memories('
+          'content, category, importance, ts, source, active) '
+          'VALUES (?, ?, ?, ?, ?, 1)',
+          [
+            content,
+            '${row['category']}',
+            (row['importance'] as num?)?.toInt().clamp(1, 5) ?? 1,
+            DateTime.now().toIso8601String(),
+            'user-approved',
+          ],
+        );
+      }
+      db.execute(
+        "UPDATE memory_candidates SET status = 'approved' WHERE id = ?",
+        [id],
+      );
+      db.execute('COMMIT');
+      return true;
+    } catch (e) {
+      try {
+        db.execute('ROLLBACK');
+      } catch (_) {}
+      PetLog.e('db: approve memory candidate error: $e');
+      return false;
+    }
+  }
+
+  bool rejectMemoryCandidate(int id) {
+    if (_db == null) return false;
+    try {
+      final pending = db.select(
+        'SELECT 1 FROM memory_candidates '
+        "WHERE id = ? AND status = 'pending' LIMIT 1",
+        [id],
+      );
+      if (pending.isEmpty) return false;
+      db.execute(
+        "UPDATE memory_candidates SET status = 'rejected' "
+        "WHERE id = ? AND status = 'pending'",
+        [id],
+      );
+      return true;
+    } catch (e) {
+      PetLog.e('db: reject memory candidate error: $e');
+      return false;
     }
   }
 

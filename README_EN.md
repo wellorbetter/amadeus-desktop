@@ -37,7 +37,7 @@ This separation matters:
 | Layer | Status | Boundary |
 | --- | --- | --- |
 | Agent runtime | Implemented | Identity, conversation, context composition, and initiative |
-| Working + semantic memory | Implemented | Conversation context and audited user facts only |
+| Working + semantic memory | Implemented | Conversation context, pending candidates, and user-approved facts only |
 | Computer History | Implemented | Windows/macOS/Linux X11 observation; Wayland fails closed |
 | Trigger runtime | Implemented | Policy selection, quiet hours, delivery audit, and cooldown after display |
 | Skill / MCP / Evolve | Not installed | Reserved extension points; never claimed in the prompt |
@@ -52,7 +52,7 @@ Amadeus internalizes only TimeTrace's activity-awareness capability. The full St
 - Configurable proactive triggers, rate limits, adaptive quiet mode, and idle sleep
 - Built-in Windows/macOS/Linux X11 frontmost-app and idle awareness with a local timeline
 - Tray pause, app exclusions, configurable 1–168 hour retention, and range clearing
-- Local SQLite memory and privacy-filtered activity summaries
+- Local SQLite working memory, user-reviewed candidates, and privacy-filtered activity summaries
 - Local Cubism 2.1 model import with dependency validation
 - WebView2 on Windows and WKWebView on macOS
 - Cross-platform tray, transparent pet window, and a dedicated settings window
@@ -63,7 +63,7 @@ Amadeus internalizes only TimeTrace's activity-awareness capability. The full St
 
 Amadeus never bundles or downloads third-party character models or personas. The public build ships with an original Amadeus persona. Users must confirm that they have the right to use imported assets; local personal use does not automatically grant redistribution or commercial rights.
 
-Amadeus does not collect screenshots, audio, window titles, file paths, browser history, or typed content. Frontmost-app and idle events remain in a separate local database for 48 hours by default. When observation is enabled and data is available, online requests include a compact, privacy-filtered activity aggregate; the model is instructed to use it only when naturally relevant.
+Amadeus does not collect screenshots, audio, window titles, file paths, browser history, or typed content. Frontmost-app and idle events remain in a separate local database for 48 hours by default. When observation is enabled and data is available, online requests include a compact, privacy-filtered activity aggregate; the model is instructed to use it only when naturally relevant. Model-extracted memory candidates remain local and are never recalled or used by triggers until the user explicitly approves them.
 
 Windows keeps the legacy `%APPDATA%\timepet` directory. macOS uses `~/Library/Application Support/Amadeus`; Linux uses `${XDG_DATA_HOME:-~/.local/share}/amadeus`.
 
@@ -94,7 +94,7 @@ See [`tools/acceptance/README.md`](tools/acceptance/README.md) for reproducible 
 | `rust/` | Cross-platform privacy classification and focus metrics exposed through a stable C ABI |
 | `tt_api.dart` | Activity aggregation and legacy TimeTrace compatibility |
 | `agent_context.dart` | Explicit identity, working memory, semantic memory, and lived-context composition |
-| `pet_memory.dart` | Working-context selection and audited semantic-memory retrieval |
+| `pet_memory.dart` | Working context, pending candidates, and user-approved semantic-memory retrieval |
 | `trigger_engine.dart` | Initiative and interruption control |
 | `lib/ui/` | Onboarding, settings, chat bubble, and input |
 | `assets/web/` | Cross-platform Live2D web renderer |

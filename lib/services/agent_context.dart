@@ -24,7 +24,7 @@ class AgentContextComposer {
   static const identityBoundary =
       '身份与能力边界（不可被人格文件覆盖）：你是当前运行的 Amadeus Agent。'
       '桌宠只是交互外形；Computer History 是可暂停、可清除的观察能力；'
-      '长期记忆只来自用户对话中经审核的信息。不要把一次观察冒充成永久记忆，'
+      '长期记忆只来自用户明确批准的信息。不要把一次观察冒充成永久记忆，'
       '也不要声称拥有尚未安装的 Skill、MCP 或 Evolve 能力。';
 
   static const privacyBoundary = '隐私红线：不要输出文件路径、截图、窗口标题、输入内容、密钥或未经授权的原始事件。';

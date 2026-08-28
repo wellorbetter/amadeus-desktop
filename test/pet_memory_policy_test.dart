@@ -6,7 +6,7 @@ import 'package:timepet/services/pet_db.dart';
 import 'package:timepet/services/pet_memory.dart';
 
 void main() {
-  test('disabled categories are rejected during audited memory storage', () {
+  test('audited facts remain pending until explicit user approval', () {
     final root = Directory.systemTemp.createTempSync('amadeus-memory-test-');
     addTearDown(() => root.deleteSync(recursive: true));
     final database = PetDb(
@@ -18,14 +18,48 @@ void main() {
       ..memoryDisabledCategories = const ['relationship'];
     final memory = PetMemory(database: database, config: config);
 
-    memory.storeAudited([
+    memory.stageAudited([
       {'content': '伴侣叫小夏', 'category': 'relationship', 'importance': 5},
       {'content': '偏好安静的 UI', 'category': 'preference', 'importance': 3},
       {'content': '一次性的低价值信息', 'category': 'fact', 'importance': 1},
     ]);
 
+    expect(memory.memoryCount(), 0);
+    expect(memory.pendingMemoryCount(), 1);
+    final candidate = memory.recentMemoryCandidates().single;
+    expect(candidate['content'], '偏好安静的 UI');
+    expect(memory.relevantMemories('界面偏好'), isEmpty);
+
+    expect(memory.approveMemoryCandidate(candidate['id'] as int), isTrue);
+    expect(memory.pendingMemoryCount(), 0);
     expect(memory.memoryCount(), 1);
+    expect(memory.recentMemoryRows().single['source'], 'user-approved');
     expect(memory.recentMemoryRows().single['content'], '偏好安静的 UI');
+  });
+
+  test('rejected candidate is not proposed again', () {
+    final root = Directory.systemTemp.createTempSync('amadeus-memory-test-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final database = PetDb(
+      pathOverride: '${root.path}/mem.db',
+      migrateLegacy: false,
+    )..init();
+    addTearDown(database.dispose);
+    final memory = PetMemory(
+      database: database,
+      config: PetConfig(pathOverride: '${root.path}/config.json'),
+    );
+    final items = [
+      {'content': '用户希望学习 Rust', 'category': 'goal', 'importance': 4},
+    ];
+
+    memory.stageAudited(items);
+    final id = memory.recentMemoryCandidates().single['id'] as int;
+    expect(memory.rejectMemoryCandidate(id), isTrue);
+    memory.stageAudited(items);
+
+    expect(memory.pendingMemoryCount(), 0);
+    expect(memory.memoryCount(), 0);
   });
 
   test('trigger audit metadata never enters conversational working memory', () {

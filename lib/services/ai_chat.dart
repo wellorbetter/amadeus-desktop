@@ -32,7 +32,6 @@ class AiChat {
   String _model;
   double _temperature;
   int _maxTokens;
-  final List<Map<String, String>> _history = [];
   bool _lastRequestCompleted = true;
 
   bool get configured => _apiKey.isNotEmpty;
@@ -77,27 +76,38 @@ class AiChat {
     return Platform.environment['OPENAI_API_KEY'] ?? '';
   }
 
-  /// 追加用户消息，返回 AI 回复（流式到 [onDelta]）。
+  /// Replies to one visible user turn.
+  ///
+  /// Conversation continuity is deliberately supplied by the caller through
+  /// [systemPrompt]. Keeping a second hidden history here would duplicate the
+  /// persistent working-memory layer and could turn proactive instructions
+  /// into fake user turns.
   Future<String> chat(
     String userText, {
     required String systemPrompt,
     void Function(String delta)? onDelta,
   }) async {
-    _history.add({'role': 'user', 'content': userText});
     final messages = [
       {'role': 'system', 'content': systemPrompt},
-      ..._history.reversed.take(10).toList().reversed,
+      {'role': 'user', 'content': userText},
     ];
+    return await _post(messages, onDelta: onDelta) ?? '';
+  }
 
-    final resp = await _post(messages, onDelta: onDelta);
-    final reply = resp ?? '';
-    if (reply.isNotEmpty) {
-      _history.add({'role': 'assistant', 'content': reply});
-      if (_history.length > 24) {
-        _history.removeRange(0, _history.length - 24);
-      }
-    }
-    return reply;
+  /// Generates a greeting or proactive utterance in an isolated request.
+  ///
+  /// [instruction] is an internal runtime directive, not something the user
+  /// said. This explicit API prevents it from entering conversational history.
+  Future<String> generate(
+    String instruction, {
+    required String systemPrompt,
+    void Function(String delta)? onDelta,
+  }) async {
+    final messages = [
+      {'role': 'system', 'content': systemPrompt},
+      {'role': 'user', 'content': instruction},
+    ];
+    return await _post(messages, onDelta: onDelta) ?? '';
   }
 
   /// 单次请求结果：retryable=true 表示可重试（429/5xx/网络错误）。
@@ -248,6 +258,4 @@ class AiChat {
     final resp = await _post(messages);
     return resp ?? '';
   }
-
-  void clearHistory() => _history.clear();
 }

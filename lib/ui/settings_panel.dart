@@ -1003,26 +1003,46 @@ class _SettingsPageState extends State<SettingsPage> {
       const SizedBox(height: 14),
       _SettingsCard(
         title: '本地记忆',
-        subtitle: '${_memoryCount()} 条长期记忆 · ${PetDb.instance.path}',
+        subtitle:
+            '${_memoryCount()} 条长期记忆 · ${_pendingMemoryCount()} 条待确认 · ${PetDb.instance.path}',
         trailing: Wrap(
           spacing: 4,
           children: [
+            if (_pendingMemoryCount() > 0)
+              FilledButton.tonalIcon(
+                onPressed: () => _openMemoryManager(showPending: true),
+                icon: const Icon(Icons.fact_check_outlined, size: 18),
+                label: Text('审核 ${_pendingMemoryCount()}'),
+              ),
             TextButton.icon(
-              onPressed: _memoryCount() == 0 ? null : _openMemoryManager,
+              onPressed: _memoryCount() == 0
+                  ? null
+                  : () => _openMemoryManager(),
               icon: const Icon(Icons.tune_rounded, size: 18),
               label: const Text('管理'),
             ),
             IconButton(
-              onPressed: _memoryCount() == 0 ? null : _confirmClearMemories,
+              onPressed: _memoryCount() == 0 && _pendingMemoryCount() == 0
+                  ? null
+                  : _confirmClearMemories,
               icon: const Icon(Icons.delete_outline_rounded, size: 18),
-              tooltip: '清除全部长期记忆',
+              tooltip: '清除长期记忆与候选',
             ),
           ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('允许自动保存的类型'),
+            if (_pendingMemoryCount() > 0) ...[
+              _InfoBanner(
+                icon: Icons.pending_actions_outlined,
+                text:
+                    'Amadeus 提出了 ${_pendingMemoryCount()} 条候选。批准前不会进入长期记忆、参与召回或触发主动对话。',
+                color: Theme.of(context).colorScheme.secondary,
+              ),
+              const SizedBox(height: 14),
+            ],
+            const Text('允许提出候选的类型'),
             const SizedBox(height: 8),
             _memoryCategoryControls(),
             const Divider(height: 28),
@@ -1075,6 +1095,15 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       if (!PetDb.instance.initialized) return 0;
       return PetMemory.instance.memoryCount();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  int _pendingMemoryCount() {
+    try {
+      if (!PetDb.instance.initialized) return 0;
+      return PetMemory.instance.pendingMemoryCount();
     } catch (_) {
       return 0;
     }
@@ -1263,89 +1292,160 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Future<void> _openMemoryManager() async {
+  Future<void> _openMemoryManager({bool showPending = false}) async {
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, refreshDialog) {
-          final rows = PetDb.instance.recentMemoryRows(limit: 200);
-          return Dialog(
-            child: SizedBox(
-              width: 680,
-              height: 560,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(22, 18, 12, 10),
-                    child: Row(
-                      children: [
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '长期记忆管理',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w600,
+      builder: (dialogContext) => DefaultTabController(
+        length: 2,
+        initialIndex: showPending ? 0 : 1,
+        child: StatefulBuilder(
+          builder: (context, refreshDialog) {
+            final pending = PetMemory.instance.recentMemoryCandidates(
+              limit: 200,
+            );
+            final remembered = PetDb.instance.recentMemoryRows(limit: 200);
+            return Dialog(
+              child: SizedBox(
+                width: 720,
+                height: 590,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(22, 18, 12, 10),
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '记忆中心',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
-                              ),
-                              SizedBox(height: 4),
-                              Text('点击编辑内容、类型与重要度；删除后不会再被召回。'),
-                            ],
+                                SizedBox(height: 4),
+                                Text('候选只有在你批准后，才会成为可召回的长期记忆。'),
+                              ],
+                            ),
                           ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(dialogContext),
-                          icon: const Icon(Icons.close_rounded),
-                          tooltip: '关闭',
-                        ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            icon: const Icon(Icons.close_rounded),
+                            tooltip: '关闭',
+                          ),
+                        ],
+                      ),
+                    ),
+                    TabBar(
+                      tabs: [
+                        Tab(text: '待确认 ${pending.length}'),
+                        Tab(text: '已记住 ${remembered.length}'),
                       ],
                     ),
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: rows.isEmpty
-                        ? const Center(child: Text('没有长期记忆'))
-                        : ListView.separated(
-                            padding: const EdgeInsets.all(14),
-                            itemCount: rows.length,
-                            separatorBuilder: (_, _) =>
-                                const Divider(height: 1),
-                            itemBuilder: (context, index) {
-                              final row = rows[index];
-                              return ListTile(
-                                title: Text('${row['content']}'),
-                                subtitle: Text(
-                                  '${row['category']} · 重要度 ${row['importance']} · ${_shortTime('${row['ts']}')}',
-                                ),
-                                onTap: () async {
-                                  await _editMemory(row);
-                                  refreshDialog(() {});
-                                  if (mounted) setState(() {});
-                                },
-                                trailing: IconButton(
-                                  onPressed: () {
-                                    PetDb.instance.deleteMemory(
-                                      row['id'] as int,
+                    const Divider(height: 1),
+                    Expanded(
+                      child: TabBarView(
+                        children: [
+                          pending.isEmpty
+                              ? const Center(child: Text('没有待确认的记忆候选'))
+                              : ListView.separated(
+                                  padding: const EdgeInsets.all(14),
+                                  itemCount: pending.length,
+                                  separatorBuilder: (_, _) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final row = pending[index];
+                                    return ListTile(
+                                      leading: const Icon(
+                                        Icons.pending_actions_outlined,
+                                      ),
+                                      title: Text('${row['content']}'),
+                                      subtitle: Text(
+                                        '${row['category']} · 重要度 ${row['importance']} · ${_shortTime('${row['ts']}')}',
+                                      ),
+                                      trailing: Wrap(
+                                        spacing: 4,
+                                        children: [
+                                          IconButton(
+                                            onPressed: () {
+                                              PetMemory.instance
+                                                  .rejectMemoryCandidate(
+                                                    row['id'] as int,
+                                                  );
+                                              refreshDialog(() {});
+                                              if (mounted) setState(() {});
+                                            },
+                                            icon: const Icon(
+                                              Icons.close_rounded,
+                                            ),
+                                            tooltip: '不记住',
+                                          ),
+                                          FilledButton.tonalIcon(
+                                            onPressed: () {
+                                              PetMemory.instance
+                                                  .approveMemoryCandidate(
+                                                    row['id'] as int,
+                                                  );
+                                              refreshDialog(() {});
+                                              if (mounted) setState(() {});
+                                            },
+                                            icon: const Icon(
+                                              Icons.check_rounded,
+                                              size: 18,
+                                            ),
+                                            label: const Text('批准'),
+                                          ),
+                                        ],
+                                      ),
                                     );
-                                    refreshDialog(() {});
-                                    if (mounted) setState(() {});
                                   },
-                                  icon: const Icon(
-                                    Icons.delete_outline_rounded,
-                                  ),
-                                  tooltip: '删除',
                                 ),
-                              );
-                            },
-                          ),
-                  ),
-                ],
+                          remembered.isEmpty
+                              ? const Center(child: Text('没有长期记忆'))
+                              : ListView.separated(
+                                  padding: const EdgeInsets.all(14),
+                                  itemCount: remembered.length,
+                                  separatorBuilder: (_, _) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final row = remembered[index];
+                                    return ListTile(
+                                      title: Text('${row['content']}'),
+                                      subtitle: Text(
+                                        '${row['category']} · 重要度 ${row['importance']} · ${_shortTime('${row['ts']}')}',
+                                      ),
+                                      onTap: () async {
+                                        await _editMemory(row);
+                                        refreshDialog(() {});
+                                        if (mounted) setState(() {});
+                                      },
+                                      trailing: IconButton(
+                                        onPressed: () {
+                                          PetDb.instance.deleteMemory(
+                                            row['id'] as int,
+                                          );
+                                          refreshDialog(() {});
+                                          if (mounted) setState(() {});
+                                        },
+                                        icon: const Icon(
+                                          Icons.delete_outline_rounded,
+                                        ),
+                                        tooltip: '删除',
+                                      ),
+                                    );
+                                  },
+                                ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -1438,8 +1538,8 @@ class _SettingsPageState extends State<SettingsPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('清除长期记忆？'),
-        content: const Text('这会删除自动提取的偏好、目标和事件。近期对话不受影响。'),
+        title: const Text('清除本地记忆？'),
+        content: const Text('这会删除已批准的长期记忆和待确认候选。近期对话与活动时间线不受影响。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),

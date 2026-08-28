@@ -5,8 +5,10 @@ import 'pet_logger.dart';
 
 /// 记忆层（本地 SQLite 分层记忆）：
 /// - 工作记忆：最近对话（messages 表）
-/// - 语义记忆：经审核的长期记忆（memories 表，偏好/习惯/目标/事件）
-/// 记忆审核：用户消息含稳定信息信号时，由 LLM 提取并写入语义记忆。
+/// - 候选记忆：LLM 提取但尚未获得用户确认的信息（memory_candidates 表）
+/// - 语义记忆：用户确认后的长期记忆（memories 表，偏好/习惯/目标/事件）
+/// 记忆审核：用户消息含稳定信息信号时，由 LLM 提取为候选；批准前
+/// 不参与召回，也不能用于主动 Trigger。
 /// Computer History 属于短期观察层，不通过本类持久化。
 class PetMemory implements AgentMemorySource {
   PetMemory({PetDb? database, PetConfig? config})
@@ -57,9 +59,9 @@ class PetMemory implements AgentMemorySource {
   /// 用户消息是否包含值得审核的信号。
   bool hasMemorySignal(String text) => _signal.hasMatch(text);
 
-  /// 把 LLM 审核结果写入长期记忆（去重 + 重要性过滤）。
-  void storeAudited(List<Map<String, dynamic>> items) {
-    var stored = 0;
+  /// 把 LLM 提取结果放入待确认区（去重 + 重要性过滤）。
+  void stageAudited(List<Map<String, dynamic>> items) {
+    var staged = 0;
     for (final it in items) {
       final content = it['content']?.toString().trim() ?? '';
       if (content.isEmpty || content.length > 500) continue;
@@ -79,17 +81,18 @@ class PetMemory implements AgentMemorySource {
       final candidate = it['category']?.toString();
       final cat = categories.contains(candidate) ? candidate! : 'fact';
       if (_config.memoryDisabledCategories.contains(cat)) continue;
-      if (_database.memoryExists(content)) continue;
-      _database.addMemory(
+      if (_database.addMemoryCandidate(
         content,
         category: cat,
         importance: importance,
-        source: 'audit',
-      );
-      stored++;
+      )) {
+        staged++;
+      }
     }
-    if (stored > 0) {
-      PetLog.i('mem: audited stored=$stored total=${memoryCount()}');
+    if (staged > 0) {
+      PetLog.i(
+        'mem: candidates staged=$staged pending=${pendingMemoryCount()}',
+      );
     }
   }
 
@@ -167,6 +170,15 @@ class PetMemory implements AgentMemorySource {
       _database.topMemory(excludeId: excludeId);
 
   int memoryCount() => _database.memoryCount();
+
+  int pendingMemoryCount() => _database.pendingMemoryCount();
+
+  List<Map<String, Object?>> recentMemoryCandidates({int limit = 50}) =>
+      _database.recentMemoryCandidates(limit: limit);
+
+  bool approveMemoryCandidate(int id) => _database.approveMemoryCandidate(id);
+
+  bool rejectMemoryCandidate(int id) => _database.rejectMemoryCandidate(id);
 
   List<Map<String, Object?>> recentMemoryRows({int limit = 8}) =>
       _database.recentMemoryRows(limit: limit);

@@ -26,6 +26,21 @@ void main() {
     expect(database.recentMemoryRows().single['importance'], 4);
     expect(database.recentMemoryRows().single['content'], '喜欢安静、低干扰的界面');
 
+    expect(
+      database.addMemoryCandidate(
+        '计划继续学习 Rust',
+        category: 'goal',
+        importance: 4,
+      ),
+      isTrue,
+    );
+    expect(database.pendingMemoryCount(), 1);
+    final candidate = database.recentMemoryCandidates().single;
+    expect(database.approveMemoryCandidate(candidate['id'] as int), isTrue);
+    expect(database.pendingMemoryCount(), 0);
+    expect(database.memoryCount(), 2);
+    expect(database.recentMemoryRows().first['source'], 'user-approved');
+
     final at = DateTime.utc(2026, 8, 27, 12, 30);
     database.recordProactiveEvent(
       triggerId: 'focus_reminder',
