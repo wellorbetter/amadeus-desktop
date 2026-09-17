@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'services/ai_chat.dart';
 import 'services/kurisu_controller.dart';
+import 'services/local_service_registry.dart';
 import 'services/pet_config.dart';
 import 'services/pet_logger.dart';
 import 'services/pet_memory.dart';
@@ -59,6 +60,10 @@ class _PetHomeState extends State<PetHome> {
   /// 轮次身份与状态机。所有 LLM / 记忆的异步回调都必须经过它校验身份，
   /// 否则旧轮次的结果会覆盖新轮次的字幕、或在取消后仍然写入记忆。
   final TurnController _turns = TurnController(logger: PetLog.i);
+
+  /// 本地服务注册表。持有本应用启动的进程句柄，使它们可被正常停止 ——
+  /// 不登记就只剩「按端口杀进程」这一条路，而那会杀掉用户自己起的程序。
+  final LocalServiceRegistry _services = LocalServiceRegistry();
 
   String _bubbleText = '正在加载…';
   bool _bubbleVisible = false;
@@ -175,6 +180,8 @@ class _PetHomeState extends State<PetHome> {
     _inputHideTimer?.cancel();
     _configTimer?.cancel();
     _triggers.stop();
+    // 只停本应用启动的服务；external 会被注册表拒绝，不误杀用户自己起的进程。
+    unawaited(_services.stop(ServiceKind.dataBridge));
     _kurisu.dispose();
     super.dispose();
   }
@@ -437,14 +444,27 @@ class _PetHomeState extends State<PetHome> {
 
   /// 本地数据桥：桌宠通过 8788 读取 TimeTrace 聚合数据。
   /// timetrace 只把数据写入 time.db，不提供 HTTP 接口；桥接脚本只读数据库。
-  /// 先探测一次，端口无服务且 node 可用时自动拉起（桥接已在 assets 内随包发布）。
+  ///
+  /// 原实现用 detached 方式启动 node、不保留句柄，之后既无法确认端口上的进程
+  /// 是不是自己起的，也无法停止它（只剩按端口杀进程这一条路，而那是禁止的）。
+  /// 现在交给注册表：保留句柄、标为 managed、退出时一起收掉。
   Future<void> _ensureBridge() async {
-    try {
+    _services.setProber(ServiceKind.dataBridge, (uri) async {
+      final started = DateTime.now();
       final ok = await _tt.refresh().timeout(
         const Duration(seconds: 3),
         onTimeout: () => false,
       );
-      if (ok) return;
+      final latency = DateTime.now().difference(started);
+      return ok
+          ? ProbeOutcome(ServiceHealth.ready, '聚合数据可读', latency: latency)
+          : ProbeOutcome(ServiceHealth.unavailable, '数据桥无响应', latency: latency);
+    });
+
+    var status = await _refreshBridge();
+    if (status.health == ServiceHealth.ready) return;
+
+    try {
       final exeDir = File(Platform.resolvedExecutable).parent.path;
       final bridge = '$exeDir/data/flutter_assets/assets/bridge/server.mjs';
       if (!File(bridge).existsSync()) {
@@ -452,12 +472,25 @@ class _PetHomeState extends State<PetHome> {
         return;
       }
       PetLog.i('bridge: spawning node $bridge');
-      await Process.start('node', [bridge], mode: ProcessStartMode.detached);
+      final proc = await Process.start('node', [bridge]);
+      _services.registerManaged(ServiceKind.dataBridge, proc);
       await Future<void>.delayed(const Duration(milliseconds: 1500));
+      status = await _refreshBridge();
+      if (status.health != ServiceHealth.ready) {
+        PetLog.w('bridge: still not ready: ${status.detail}');
+      }
     } catch (e) {
       PetLog.w('bridge: spawn failed: $e');
     }
   }
+
+  Future<ServiceStatus> _refreshBridge() => _services.refresh(
+    ServiceKind.dataBridge,
+    endpoint: _tt.base,
+    // 探测时按 external 报，只有登记过句柄之后注册表才会改成 managed ——
+    // 端口上已经有服务时那多半是用户或上一次运行留下的进程，不是我们能停的。
+    ownership: ServiceOwnership.external,
+  );
 
   /// 所有前台 LLM 轮次的唯一入口。
   ///
