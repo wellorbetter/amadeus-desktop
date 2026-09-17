@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'services/ai_chat.dart';
 import 'services/kurisu_controller.dart';
+import 'services/local_service_registry.dart';
 import 'services/pet_config.dart';
 import 'services/pet_logger.dart';
 import 'services/pet_memory.dart';
@@ -17,6 +18,7 @@ import 'services/pet_soul.dart';
 import 'services/pet_window.dart';
 import 'services/trigger_engine.dart';
 import 'services/tt_api.dart';
+import 'services/turn_controller.dart';
 import 'ui/bubble.dart';
 import 'ui/input_bar.dart';
 
@@ -55,9 +57,16 @@ class _PetHomeState extends State<PetHome> {
   late final TriggerEngine _triggers = TriggerEngine(tt: _tt);
   late final AiChat _ai;
 
+  /// 轮次身份与状态机。所有 LLM / 记忆的异步回调都必须经过它校验身份，
+  /// 否则旧轮次的结果会覆盖新轮次的字幕、或在取消后仍然写入记忆。
+  final TurnController _turns = TurnController(logger: PetLog.i);
+
+  /// 本地服务注册表。持有本应用启动的进程句柄，使它们可被正常停止 ——
+  /// 不登记就只剩「按端口杀进程」这一条路，而那会杀掉用户自己起的程序。
+  final LocalServiceRegistry _services = LocalServiceRegistry();
+
   String _bubbleText = '正在加载…';
   bool _bubbleVisible = false;
-  bool _typing = false;
   bool _aiReady = false;
   bool _webviewReady = false;
   bool _inputVisible = false;
@@ -74,6 +83,12 @@ class _PetHomeState extends State<PetHome> {
   String _queuedBubbleText = '';
   Timer? _inputHideTimer;
   Timer? _configTimer; // 配置热生效轮询：检测 config.json 变化后应用
+  bool _configApplying = false; // 配置热生效互斥（两条通知路径可能同时到达）
+  DateTime? _lastConfigApplyAt;
+  // 前台 LLM 单飞闸门：AiChat 把对话历史与完成标志放在实例上
+  // （ai_chat.dart:35、:36），两个请求并发会互相污染「回复是否完整」的判定，
+  // 进而虚报完整（违反 INV-04）。抢占在轮次层立即生效，但新请求要等旧连接排空。
+  Future<void>? _llmDrain;
   double? _lastModelScale;
   // 区域诊断：记录每个绘制区域的实际位置/大小，便于排查布局错位
   final GlobalKey _webviewKey = GlobalKey();
@@ -81,6 +96,10 @@ class _PetHomeState extends State<PetHome> {
   final GlobalKey _inputKey = GlobalKey();
 
   bool get _aiActive => _ai.configured && PetConfig.instance.aiEnabled;
+
+  /// 是否有轮次在进行。以前是一个独立的 `bool _typing` 字段，它同时充当
+  /// 事实上的轮次锁，但 `_greet` 从不检查它。现在唯一来源是轮次状态机。
+  bool get _typing => _turns.isBusy;
 
   @override
   void initState() {
@@ -110,6 +129,10 @@ class _PetHomeState extends State<PetHome> {
       'app: initState aiReady=$_aiReady base=${cfg.aiBaseUrl} model=${cfg.aiModel} flutterDpr=$dpr',
     );
 
+    // 轮次状态变化时刷新气泡（打字指示器等）。
+    _turns.onStateChanged = (_) {
+      if (mounted) setState(() {});
+    };
     // 交互链路：点桌宠 / 托盘「聊两句」-> 弹出聊天框
     _kurisu.onUserTap = _showInput;
     _kurisu.onUserMenu = _showPetMenu;
@@ -123,13 +146,15 @@ class _PetHomeState extends State<PetHome> {
     _triggers.onProactive = _proactive;
     // 休眠省电：空闲休眠时暂停一切 LLM 调用，唤醒后自然问候
     _triggers.onSleepChanged = _onSleepChanged;
-    // 设置窗口保存配置后，通过跨窗口通道通知桌宠热生效
+    // 配置热生效有两条通知路径，都汇到 _reloadConfig 这一个入口去重：
+    // 1) 设置窗口保存后的跨窗口通道（立即，force：soul.md 单独改动时 config.json 未变）；
+    // 2) 每秒轮询 config.json（兜底，不同窗口的 channel 互相收不到）。
     const WindowMethodChannel(
       'pet',
       mode: ChannelMode.unidirectional,
     ).setMethodCallHandler((call) async {
       if (call.method == 'config-changed') {
-        await _onSettingsChanged();
+        await _reloadConfig('channel', force: true);
       } else if (call.method == 'restart') {
         await Process.start(
           Platform.resolvedExecutable,
@@ -140,14 +165,9 @@ class _PetHomeState extends State<PetHome> {
         await windowManager.destroy();
       }
     });
-    // 配置热生效：设置窗口把改动写入 config.json 后，桌宠侧每秒轮询并应用，
-    // 不依赖跨窗口 method channel（不同窗口的 channel 是独立的，收不到）。
     _configTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
       if (!mounted) return;
-      if (PetConfig.instance.reloadIfChanged()) {
-        PetLog.i('app: config changed (poll), applying');
-        await _onSettingsChanged();
-      }
+      await _reloadConfig('poll');
     });
 
     _bootstrap();
@@ -160,6 +180,8 @@ class _PetHomeState extends State<PetHome> {
     _inputHideTimer?.cancel();
     _configTimer?.cancel();
     _triggers.stop();
+    // 只停本应用启动的服务；external 会被注册表拒绝，不误杀用户自己起的进程。
+    unawaited(_services.stop(ServiceKind.dataBridge));
     _kurisu.dispose();
     super.dispose();
   }
@@ -422,14 +444,27 @@ class _PetHomeState extends State<PetHome> {
 
   /// 本地数据桥：桌宠通过 8788 读取 TimeTrace 聚合数据。
   /// timetrace 只把数据写入 time.db，不提供 HTTP 接口；桥接脚本只读数据库。
-  /// 先探测一次，端口无服务且 node 可用时自动拉起（桥接已在 assets 内随包发布）。
+  ///
+  /// 原实现用 detached 方式启动 node、不保留句柄，之后既无法确认端口上的进程
+  /// 是不是自己起的，也无法停止它（只剩按端口杀进程这一条路，而那是禁止的）。
+  /// 现在交给注册表：保留句柄、标为 managed、退出时一起收掉。
   Future<void> _ensureBridge() async {
-    try {
+    _services.setProber(ServiceKind.dataBridge, (uri) async {
+      final started = DateTime.now();
       final ok = await _tt.refresh().timeout(
         const Duration(seconds: 3),
         onTimeout: () => false,
       );
-      if (ok) return;
+      final latency = DateTime.now().difference(started);
+      return ok
+          ? ProbeOutcome(ServiceHealth.ready, '聚合数据可读', latency: latency)
+          : ProbeOutcome(ServiceHealth.unavailable, '数据桥无响应', latency: latency);
+    });
+
+    var status = await _refreshBridge();
+    if (status.health == ServiceHealth.ready) return;
+
+    try {
       final exeDir = File(Platform.resolvedExecutable).parent.path;
       final bridge = '$exeDir/data/flutter_assets/assets/bridge/server.mjs';
       if (!File(bridge).existsSync()) {
@@ -437,121 +472,154 @@ class _PetHomeState extends State<PetHome> {
         return;
       }
       PetLog.i('bridge: spawning node $bridge');
-      await Process.start('node', [bridge], mode: ProcessStartMode.detached);
+      final proc = await Process.start('node', [bridge]);
+      _services.registerManaged(ServiceKind.dataBridge, proc);
       await Future<void>.delayed(const Duration(milliseconds: 1500));
+      status = await _refreshBridge();
+      if (status.health != ServiceHealth.ready) {
+        PetLog.w('bridge: still not ready: ${status.detail}');
+      }
     } catch (e) {
       PetLog.w('bridge: spawn failed: $e');
     }
   }
 
-  Future<void> _greet() async {
-    _say('（打个招呼…）');
+  Future<ServiceStatus> _refreshBridge() => _services.refresh(
+    ServiceKind.dataBridge,
+    endpoint: _tt.base,
+    // 探测时按 external 报，只有登记过句柄之后注册表才会改成 managed ——
+    // 端口上已经有服务时那多半是用户或上一次运行留下的进程，不是我们能停的。
+    ownership: ServiceOwnership.external,
+  );
+
+  /// 所有前台 LLM 轮次的唯一入口。
+  ///
+  /// 三个旧入口（`_greet` / `_proactive` / `_ask`）各自复制了一遍「置 `_typing`、
+  /// 累积 delta、判断完整性、写记忆」的流程，且 `onDelta` 都不做身份校验 ——
+  /// 旧轮次的 delta 会直接覆盖新轮次的字幕。现在统一由 [TurnController] 守卫。
+  Future<void> _runTurn({
+    required TurnKind kind,
+    required String prompt,
+    required String placeholder,
+    required String fallback,
+    String? userText,
+    bool auditMemory = false,
+  }) async {
+    final turn = _turns.begin(kind);
+    if (turn == null) {
+      PetLog.i('app: ${kind.name} not started state=${_turns.state.name}');
+      return;
+    }
+    if (userText != null) {
+      _lastUserText = userText;
+      PetMemory.instance.record('user', userText);
+      _scheduleInputHide();
+    }
+    // 本地反馈先给出，不等模型（Spec §15）。
     _bubbleTimer?.cancel();
-    if (mounted) setState(() => _typing = true);
-    PetLog.i('app: greet start');
-    String accumulated = '';
-    final reply = await _ai.chat(
-      '早上好/晚上好，简单打个招呼就好，两三句话。可以自然地提到你观察到的用户状态（比如正在用什么、今天活跃了多久），但别生硬报数。${_dataCorpus()}',
-      systemPrompt: _systemPrompt,
-      onDelta: (d) {
-        accumulated += d;
-        _queueBubbleText(accumulated);
-      },
-    );
-    final complete = _ai.lastRequestCompleted;
-    PetLog.i('app: greet reply len=${reply.length}');
-    if (!complete) {
-      final partial = reply.isNotEmpty ? reply : accumulated;
-      _say(partial.isEmpty ? '回复中断了。' : '$partial\n\n（回复中断，未保存为完整对话）');
-      return;
+    if (mounted) {
+      setState(() {
+        _bubbleText = placeholder;
+        _bubbleVisible = true;
+      });
     }
-    final text = reply.isNotEmpty
-        ? reply
-        : (accumulated.isNotEmpty ? accumulated : '嗨，我在呢。今天过得怎么样？');
-    PetMemory.instance.record('assistant', text);
-    _say(text);
-    _kurisu.motion('tap_body');
-  }
-
-  Future<void> _proactive(String prompt) async {
-    if (_typing || !_aiActive) return;
-    _say('（红莉栖想找你说话…）');
-    _bubbleTimer?.cancel();
-    if (mounted) setState(() => _typing = true);
-    PetLog.i('app: proactive prompt=$prompt');
-    String accumulated = '';
-    final reply = await _ai.chat(
-      '$prompt${_dataCorpus()}',
-      systemPrompt: _systemPrompt,
-      onDelta: (d) {
-        accumulated += d;
-        _queueBubbleText(accumulated);
-      },
-    );
-    final complete = _ai.lastRequestCompleted;
-    PetLog.i('app: proactive reply len=${reply.length}');
-    if (!complete) {
-      final partial = reply.isNotEmpty ? reply : accumulated;
-      _say(partial.isEmpty ? '回复中断了。' : '$partial\n\n（回复中断，未保存为完整对话）');
-      return;
-    }
-    final text = reply.isNotEmpty
-        ? reply
-        : (accumulated.isNotEmpty ? accumulated : '喂，助手君，在忙吗？');
-    PetMemory.instance.record('assistant', text);
-    _say(text);
-    _kurisu.motion('tap_body');
-  }
-
-  Future<void> _ask(String text) async {
-    if (_typing) {
-      PetLog.i('app: ask ignored while another reply is streaming');
-      return;
-    }
-    PetLog.i('app: ask start len=${text.length}');
-    _lastUserText = text;
-    PetMemory.instance.record('user', text);
-    _scheduleInputHide();
-    setState(() {
-      _typing = true;
-      _bubbleText = '';
-      _bubbleVisible = true;
-    });
-
     if (!_aiActive) {
-      setState(() => _typing = false);
+      turn.complete();
       _say('（AI 未启用，先去设置里打开吧）');
       return;
     }
+    PetLog.i('app: ${kind.name} start turn=${turn.identity}');
+
+    // 抢占已在轮次层生效（旧轮次的字幕当场停住），但旧连接还不能真正中断，
+    // 必须等它排空再发新请求，否则两个请求会共用同一份历史与完成标志。
+    // 真正的取消（中断 SSE 读取并关闭连接）在 U4 引入。
+    final pending = _llmDrain;
+    if (pending != null) {
+      PetLog.i('app: ${kind.name} waiting for previous request to drain');
+      await pending;
+      if (!turn.isValid) {
+        PetLog.i('app: ${kind.name} dropped while waiting turn=${turn.identity}');
+        return;
+      }
+    }
 
     String accumulated = '';
-    final reply = await _ai.chat(
-      text,
-      systemPrompt: _systemPrompt,
-      onDelta: (d) {
-        accumulated += d;
-        _queueBubbleText(accumulated);
-      },
-    );
-    final complete = _ai.lastRequestCompleted;
+    final drained = Completer<void>();
+    _llmDrain = drained.future;
+    String reply;
+    try {
+      reply = await _ai.chat(
+        prompt,
+        systemPrompt: _systemPrompt,
+        onDelta: (d) {
+          // 失效的轮次不得写字幕（INV-03）。
+          turn.guard(() {
+            accumulated += d;
+            _queueBubbleText(accumulated);
+          });
+        },
+      );
+    } finally {
+      if (identical(_llmDrain, drained.future)) _llmDrain = null;
+      drained.complete();
+    }
+
+    if (!turn.isValid) {
+      PetLog.i('app: ${kind.name} discarded turn=${turn.identity}');
+      return;
+    }
     if (!mounted) return;
-    setState(() => _typing = false);
-    final finalText = reply.isNotEmpty ? reply : accumulated;
-    PetLog.i('app: ask reply len=${finalText.length} complete=$complete');
-    if (finalText.isEmpty) {
+    final complete = _ai.lastRequestCompleted;
+    final text = reply.isNotEmpty ? reply : accumulated;
+    PetLog.i('app: ${kind.name} reply len=${text.length} complete=$complete');
+    if (!complete) {
+      turn.complete();
+      _say(text.isEmpty ? '回复中断了。' : '$text\n\n（回复中断，未保存为完整对话）');
+      return;
+    }
+    if (text.isEmpty && fallback.isEmpty) {
+      turn.complete();
       _say('（AI 没有回复，可能是网络或 Key 问题）');
       return;
     }
-    if (!complete) {
-      _say('$finalText\n\n（回复中断，未保存为完整对话）');
-      return;
-    }
+    final finalText = text.isNotEmpty ? text : fallback;
     PetMemory.instance.record('assistant', finalText);
-    _scheduleHide();
+    turn.complete();
+    _say(finalText);
     _kurisu.motion('tap_body');
-    // 异步记忆审核：提取值得长期记住的信息（不阻塞回复）
-    unawaited(_auditMemory(text));
+    if (auditMemory && userText != null) {
+      // 异步记忆审核：提取值得长期记住的信息（不阻塞回复）
+      unawaited(_auditMemory(userText, turn));
+    }
   }
+
+  Future<void> _greet() => _runTurn(
+    kind: TurnKind.greeting,
+    prompt:
+        '早上好/晚上好，简单打个招呼就好，两三句话。可以自然地提到你观察到的用户状态（比如正在用什么、今天活跃了多久），但别生硬报数。${_dataCorpus()}',
+    placeholder: '（打个招呼…）',
+    fallback: '嗨，我在呢。今天过得怎么样？',
+  );
+
+  Future<void> _proactive(String prompt) {
+    if (!_aiActive) return Future<void>.value();
+    // 主动 prompt 内嵌用户记忆内容，不进普通日志（Spec §13）。
+    return _runTurn(
+      kind: TurnKind.proactive,
+      prompt: '$prompt${_dataCorpus()}',
+      placeholder: '（红莉栖想找你说话…）',
+      fallback: '喂，助手君，在忙吗？',
+    );
+  }
+
+  Future<void> _ask(String text) => _runTurn(
+    kind: TurnKind.userText,
+    prompt: text,
+    placeholder: '',
+    fallback: '',
+    userText: text,
+    auditMemory: true,
+  );
 
   void _showPetMenu(int x, int y) {
     if (!mounted) return;
@@ -635,7 +703,11 @@ class _PetHomeState extends State<PetHome> {
   }
 
   /// 记忆审核：用户消息含稳定信息信号时，用 LLM 提取偏好/目标等写入长期记忆。
-  Future<void> _auditMemory(String userText) async {
+  ///
+  /// [turn] 是发起本次审核的轮次。审核是第五条异步回调路径，返回时轮次可能已被
+  /// 取消，此时结果一律丢弃（INV-03）；但轮次正常结束后即便用户已开始下一轮，
+  /// 这次记忆仍然要落盘。
+  Future<void> _auditMemory(String userText, TurnHandle turn) async {
     if (!_aiActive || _sleeping) return;
     if (!PetMemory.instance.hasMemorySignal(userText)) return;
     final now = DateTime.now();
@@ -644,7 +716,7 @@ class _PetHomeState extends State<PetHome> {
       return;
     }
     _lastAuditAt = now;
-    PetLog.i('mem: audit start');
+    PetLog.i('mem: audit start turn=${turn.identity}');
     final reply = await _ai.auxiliaryClient().rawChat(
       system: '你是一个严格的记忆提取器，只提取稳定且长期有用的用户信息。',
       user:
@@ -657,8 +729,17 @@ class _PetHomeState extends State<PetHome> {
           '用户消息：$userText',
     );
     final items = _parseMemoryJson(reply);
-    if (items.isNotEmpty) {
+    if (items.isEmpty) {
+      PetLog.i('mem: audit done extracted=0');
+      return;
+    }
+    final stored = turn.guardPersist(() {
       PetMemory.instance.storeAudited(items);
+      return true;
+    });
+    if (stored == null) {
+      PetLog.i('mem: audit discarded (turn cancelled) turn=${turn.identity}');
+      return;
     }
     PetLog.i('mem: audit done extracted=${items.length}');
   }
@@ -691,13 +772,47 @@ class _PetHomeState extends State<PetHome> {
     _scheduleInputHide();
   }
 
-  /// 设置窗口保存配置后（跨窗口通道）触发的热生效。
-  Future<void> _onSettingsChanged() async {
-    PetLog.i('app: settings changed (remote), applying side effects');
-    PetConfig.instance
-        .reloadIfChanged(); // reload config from disk (settings-window path)
+  /// 配置热生效的唯一入口。
+  ///
+  /// 跨窗口通道与每秒轮询两条路径都汇到这里：按「文件是否真的变了」去重，
+  /// 并互斥执行，避免同一次保存被应用两遍（重复贴合窗口、重复失效轮次）。
+  Future<void> _reloadConfig(String source, {bool force = false}) async {
+    if (_configApplying) return;
+    final changed = PetConfig.instance.reloadIfChanged();
+    if (!changed && !force) return;
+    if (!changed) {
+      // 通道通知但 config.json 未变（例如只改了 soul.md）：仍然应用一次，
+      // 但刚刚应用过就不重复做。
+      final last = _lastConfigApplyAt;
+      if (last != null &&
+          DateTime.now().difference(last) < const Duration(milliseconds: 1200)) {
+        PetLog.i('app: config reload skipped (just applied) source=$source');
+        return;
+      }
+    }
+    _configApplying = true;
+    try {
+      await _applySettingsChanged(source, changed: changed);
+    } finally {
+      _configApplying = false;
+      _lastConfigApplyAt = DateTime.now();
+    }
+  }
+
+  /// 应用配置改动的副作用：人格、模型连接、模型本体、窗口与外观。
+  Future<void> _applySettingsChanged(
+    String source, {
+    required bool changed,
+  }) async {
+    PetLog.i('app: settings changed source=$source fileChanged=$changed');
     final cfg = PetConfig.instance;
+    if (cfg.migrationNotes.isNotEmpty) {
+      PetLog.w('config: ${cfg.migrationNotes.join(' | ')}');
+    }
     PetSoul.instance.load(); // 人格插件热重载
+    // 连接参数与人设在生成中途换掉，会得到半句旧人设 + 半句新人设的回复。
+    // 先让在途轮次失效，再应用新配置（Spec §7.1）。
+    _turns.invalidate(reason: 'config-changed');
     _ai.updateConfig(
       apiKey: cfg.aiApiKey.isEmpty ? null : cfg.aiApiKey,
       baseUrl: cfg.aiBaseUrl,
@@ -739,7 +854,6 @@ class _PetHomeState extends State<PetHome> {
     setState(() {
       _bubbleText = text;
       _bubbleVisible = true;
-      _typing = false;
     });
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _logRegions('bubble-show'),
